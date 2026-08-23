@@ -21,6 +21,8 @@
 #include <linux/ptrace.h>
 #include <linux/nvme_ioctl.h>
 #include <linux/pm_qos.h>
+#include <linux/pci.h>
+#include <linux/multikernel.h>
 #include <linux/ratelimit.h>
 #include <linux/unaligned.h>
 
@@ -5064,6 +5066,29 @@ static void nvme_free_ctrl(struct device *dev)
 		nvme_put_subsystem(subsys);
 }
 
+
+/*
+ * A multikernel instance names its controllers from the device tree
+ * aliases it was given, so a device keeps its number across kernels.
+ * Controllers without an alias number above the aliased range.
+ */
+static int nvme_alloc_instance(struct nvme_ctrl *ctrl)
+{
+	int id = -ENODEV, min = 0;
+
+	if (dev_is_pci(ctrl->dev))
+		id = mk_pci_alias_id(to_pci_dev(ctrl->dev), "nvme");
+	if (id >= 0 &&
+	    ida_alloc_range(&nvme_instance_ida, id, id, GFP_KERNEL) == id)
+		return id;
+
+	id = mk_alias_highest_id("nvme");
+	if (id >= 0)
+		min = id + 1;
+
+	return ida_alloc_min(&nvme_instance_ida, min, GFP_KERNEL);
+}
+
 /*
  * Initialize a NVMe controller structures.  This needs to be called during
  * earliest initialization so that we have the initialized structured around
@@ -5114,7 +5139,7 @@ int nvme_init_ctrl(struct nvme_ctrl *ctrl, struct device *dev,
 		goto out;
 	}
 
-	ret = ida_alloc(&nvme_instance_ida, GFP_KERNEL);
+	ret = nvme_alloc_instance(ctrl);
 	if (ret < 0)
 		goto out;
 	ctrl->instance = ret;
