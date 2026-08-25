@@ -177,7 +177,11 @@ void mk_ipi_ring_drop_pending(void);
 #define MK_RES_QUERY        (MK_MSG_RESOURCE + 5)
 #define MK_RES_DEVICE_ADD   (MK_MSG_RESOURCE + 6)
 #define MK_RES_DEVICE_REMOVE (MK_MSG_RESOURCE + 7)
+#define MK_RES_IRQ_ALLOC    (MK_MSG_RESOURCE + 8)   /* Spawn asks for a device MSI message */
+#define MK_RES_IRQ_MODIFY   (MK_MSG_RESOURCE + 9)   /* Spawn moved the interrupt's CPU */
+#define MK_RES_IRQ_FREE     (MK_MSG_RESOURCE + 10)  /* Spawn released the interrupt */
 #define MK_RES_ACK          (MK_MSG_RESOURCE + 0x100)  /* Response/acknowledgment */
+#define MK_RES_IRQ_ACK      (MK_MSG_RESOURCE + 0x101)  /* IRQ_ALLOC response with the message */
 
 /* System management subtypes */
 #define MK_SYS_HEARTBEAT    (MK_MSG_SYSTEM + 1)
@@ -267,6 +271,45 @@ struct mk_resource_ack {
 	u64 resource_id;        /* Physical CPU ID, memory PFN, etc. */
 };
 
+/*
+ * Device interrupt mediation. The kernel that owns the IOMMU composes
+ * the MSI message for a device it gave away: the spawn kernel names the
+ * device and the (cpu, vector) it picked, the owner programs a
+ * SID-verified interrupt remapping entry targeting them and returns the
+ * remappable-format message, opaque to the spawn kernel. iommu_seq and
+ * index name the entry for later retargeting and release.
+ */
+struct mk_irq_resource_payload {
+	u16 domain;             /* PCI domain of the device */
+	u8 bus;                 /* PCI bus */
+	u8 devfn;               /* PCI device and function (combined) */
+	u8 vector;              /* Vector on the requesting kernel's CPU */
+	u32 dest_apicid;        /* APIC ID of the requesting kernel's CPU */
+	u32 iommu_seq;          /* For MODIFY/FREE: the entry's IOMMU */
+	u32 index;              /* For MODIFY/FREE: the entry's index */
+	u64 cookie;             /* Correlates the IRQ_ACK for ALLOC */
+	int sender_instance_id; /* Sender instance ID for the reply */
+};
+
+struct mk_irq_ack {
+	u64 cookie;             /* From the IRQ_ALLOC request */
+	s32 result;             /* 0 = success, negative = error */
+	u32 iommu_seq;          /* The entry's IOMMU */
+	u32 index;              /* The entry's index */
+	u32 addr_lo;            /* The composed MSI message */
+	u32 addr_hi;
+	u32 data;
+};
+
+/* What a mediated MSI allocation hands back to the requesting kernel */
+struct mk_msi_irte {
+	u32 iommu_seq;
+	u32 index;
+	u32 addr_lo;
+	u32 addr_hi;
+	u32 data;
+};
+
 /* Shutdown request payload */
 struct mk_shutdown_payload {
 	u32 flags;
@@ -322,8 +365,14 @@ int mk_unregister_msg_handler(u32 msg_type, mk_msg_handler_t handler);
 
 /* Pending message tracking for request-response pattern */
 struct mk_pending_msg *mk_msg_pending_add(u32 msg_type, u32 operation, u64 resource_id);
+struct mk_pending_msg *mk_msg_pending_add_reply(u32 msg_type, u32 operation,
+						u64 resource_id, void *reply,
+						u32 reply_len);
 void mk_msg_pending_complete(u32 msg_type, u32 operation, u64 resource_id, int result);
+void mk_msg_pending_complete_data(u32 msg_type, u32 operation, u64 resource_id,
+				  int result, const void *data, u32 len);
 int mk_msg_pending_wait(struct mk_pending_msg *pending, unsigned long timeout_ms);
+int mk_msg_pending_poll(struct mk_pending_msg *pending, unsigned int timeout_us);
 
 /**
  * Convenience functions for common message types
@@ -869,6 +918,50 @@ bool mk_platform_device_allowed(const char *name, const char *hid);
 
 /* PCI host bridges described by the instance device tree */
 extern struct list_head mk_pci_host_bridges;
+
+/* Whether this kernel's device MSI messages are composed by its spawner */
+extern bool mk_msi_mediated;
+
+/* Mediated device interrupts: requests to the kernel that owns the IOMMU */
+int mk_msi_irte_alloc(u16 domain, u8 bus, u8 devfn, u32 dest_apicid,
+		      u8 vector, struct mk_msi_irte *out);
+int mk_msi_irte_modify(u16 domain, u8 bus, u8 devfn, u32 iommu_seq,
+		       u32 index, u32 dest_apicid, u8 vector);
+void mk_msi_irte_free(u32 iommu_seq, u32 index);
+
+#ifdef CONFIG_X86
+struct irq_domain *mk_create_pci_msi_domain(void);
+#endif
+
+/* Owner-side interrupt remapping backend (Intel VT-d) */
+struct pci_dev;
+#if IS_ENABLED(CONFIG_INTEL_IOMMU) && IS_ENABLED(CONFIG_IRQ_REMAP)
+bool mk_intel_ir_active(void);
+int mk_intel_ir_alloc(struct pci_dev *pdev, u32 dest_apicid, u8 vector,
+		      struct mk_msi_irte *out);
+int mk_intel_ir_modify(struct pci_dev *pdev, u32 iommu_seq, u32 index,
+		       u32 dest_apicid, u8 vector);
+int mk_intel_ir_free(u32 iommu_seq, u32 index);
+#else
+static inline bool mk_intel_ir_active(void)
+{
+	return false;
+}
+static inline int mk_intel_ir_alloc(struct pci_dev *pdev, u32 dest_apicid,
+				    u8 vector, struct mk_msi_irte *out)
+{
+	return -ENODEV;
+}
+static inline int mk_intel_ir_modify(struct pci_dev *pdev, u32 iommu_seq,
+				     u32 index, u32 dest_apicid, u8 vector)
+{
+	return -ENODEV;
+}
+static inline int mk_intel_ir_free(u32 iommu_seq, u32 index)
+{
+	return -ENODEV;
+}
+#endif
 
 /* Stable device names from the instance's /aliases */
 const char *mk_pci_alias(struct pci_dev *pdev);

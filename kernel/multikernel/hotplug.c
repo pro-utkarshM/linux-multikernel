@@ -938,6 +938,99 @@ static int mk_handle_device_remove(struct mk_device_resource_payload *payload, u
  * messaging system. It dispatches to specific handlers based on the
  * message subtype.
  */
+struct mk_irq_mediate_work {
+	struct work_struct work;
+	struct mk_irq_resource_payload payload;
+	u32 operation;
+};
+
+/*
+ * A device the pool gave away keeps its pci_dev here (only the driver
+ * was unbound), so the interrupt remapping backend can verify the
+ * requester ID the way it would for a device this kernel drives.
+ */
+static void mk_irq_mediate_work_fn(struct work_struct *work)
+{
+	struct mk_irq_mediate_work *iw =
+		container_of(work, struct mk_irq_mediate_work, work);
+	struct mk_irq_resource_payload *p = &iw->payload;
+	struct pci_dev *pdev;
+
+	pdev = pci_get_domain_bus_and_slot(p->domain, p->bus, p->devfn);
+
+	switch (iw->operation) {
+	case MK_RES_IRQ_ALLOC: {
+		struct mk_msi_irte irte = {};
+		struct mk_irq_ack ack = { .cookie = p->cookie };
+		int ret;
+
+		if (!pdev)
+			ack.result = -ENODEV;
+		else
+			ack.result = mk_intel_ir_alloc(pdev, p->dest_apicid,
+						       p->vector, &irte);
+		ack.iommu_seq = irte.iommu_seq;
+		ack.index = irte.index;
+		ack.addr_lo = irte.addr_lo;
+		ack.addr_hi = irte.addr_hi;
+		ack.data = irte.data;
+
+		ret = mk_send_message(p->sender_instance_id, MK_MSG_RESOURCE,
+				      MK_RES_IRQ_ACK, &ack, sizeof(ack));
+		if (ret < 0)
+			pr_warn("Multikernel IRQ: failed to reply to instance %d: %d\n",
+				p->sender_instance_id, ret);
+		break;
+	}
+	case MK_RES_IRQ_MODIFY: {
+		struct mk_resource_ack ack = {
+			.operation = MK_RES_IRQ_MODIFY,
+			.resource_id = p->cookie,
+		};
+
+		if (pdev)
+			ack.result = mk_intel_ir_modify(pdev, p->iommu_seq,
+							p->index,
+							p->dest_apicid,
+							p->vector);
+		else
+			ack.result = -ENODEV;
+
+		if (mk_send_message(p->sender_instance_id, MK_MSG_RESOURCE,
+				    MK_RES_ACK, &ack, sizeof(ack)) < 0)
+			pr_warn("Multikernel IRQ: failed to ack retarget for instance %d\n",
+				p->sender_instance_id);
+		break;
+	}
+	case MK_RES_IRQ_FREE:
+		mk_intel_ir_free(p->iommu_seq, p->index);
+		break;
+	}
+
+	pci_dev_put(pdev);
+	kfree(iw);
+}
+
+static int mk_handle_irq_mediate(u32 operation, void *payload, u32 payload_len)
+{
+	struct mk_irq_mediate_work *iw;
+
+	if (payload_len < sizeof(struct mk_irq_resource_payload)) {
+		pr_err("Multikernel IRQ: invalid payload size: %u\n", payload_len);
+		return -EINVAL;
+	}
+
+	iw = kmalloc(sizeof(*iw), GFP_ATOMIC);
+	if (!iw)
+		return -ENOMEM;
+
+	INIT_WORK(&iw->work, mk_irq_mediate_work_fn);
+	iw->payload = *(struct mk_irq_resource_payload *)payload;
+	iw->operation = operation;
+	schedule_work(&iw->work);
+	return 0;
+}
+
 static void mk_resource_msg_handler(u32 msg_type, u32 subtype,
 				    void *payload, u32 payload_len, void *ctx)
 {
@@ -971,6 +1064,26 @@ static void mk_resource_msg_handler(u32 msg_type, u32 subtype,
 
 	case MK_RES_DEVICE_REMOVE:
 		ret = mk_handle_device_remove((struct mk_device_resource_payload *)payload, payload_len);
+		break;
+
+	case MK_RES_IRQ_ALLOC:
+	case MK_RES_IRQ_MODIFY:
+	case MK_RES_IRQ_FREE:
+		ret = mk_handle_irq_mediate(subtype, payload, payload_len);
+		break;
+
+	case MK_RES_IRQ_ACK:
+		if (payload_len >= sizeof(struct mk_irq_ack)) {
+			struct mk_irq_ack *ack = payload;
+
+			mk_msg_pending_complete_data(MK_MSG_RESOURCE,
+						     MK_RES_IRQ_ALLOC,
+						     ack->cookie, ack->result,
+						     ack, sizeof(*ack));
+		} else {
+			pr_warn("Multikernel IRQ: invalid IRQ ACK payload size: %u\n",
+				payload_len);
+		}
 		break;
 
 	case MK_RES_ACK:
@@ -1712,4 +1825,112 @@ int mk_send_device_remove(int instance_id, u16 domain, u8 bus, u8 devfn)
 out:
 	mk_instance_put(target_instance);
 	return ret;
+}
+
+/*
+ * Mediated device interrupts, the requesting side. The kernel that
+ * spawned this one registered itself as instance 0; it owns the IOMMU
+ * and composes the MSI message. Allocation waits for the reply since
+ * the caller needs the message; retarget and release are one-way, the
+ * message is index-stable so nothing here depends on their completion.
+ */
+static atomic64_t mk_irq_cookie;
+
+int mk_msi_irte_alloc(u16 domain, u8 bus, u8 devfn, u32 dest_apicid,
+		      u8 vector, struct mk_msi_irte *out)
+{
+	struct mk_irq_resource_payload payload = {
+		.domain = domain,
+		.bus = bus,
+		.devfn = devfn,
+		.vector = vector,
+		.dest_apicid = dest_apicid,
+		.cookie = atomic64_inc_return(&mk_irq_cookie),
+		.sender_instance_id = root_instance->id,
+	};
+	struct mk_irq_ack ack = {};
+	struct mk_pending_msg *pending;
+	int ret;
+
+	pending = mk_msg_pending_add_reply(MK_MSG_RESOURCE, MK_RES_IRQ_ALLOC,
+					   payload.cookie, &ack, sizeof(ack));
+	if (!pending)
+		return -ENOMEM;
+
+	ret = mk_send_message(0, MK_MSG_RESOURCE, MK_RES_IRQ_ALLOC,
+			      &payload, sizeof(payload));
+	if (ret < 0) {
+		mk_msg_pending_complete(MK_MSG_RESOURCE, MK_RES_IRQ_ALLOC,
+					payload.cookie, ret);
+		mk_msg_pending_wait(pending, 0);
+		return ret;
+	}
+
+	ret = mk_msg_pending_wait(pending, 1000);
+	if (ret < 0)
+		return ret;
+
+	out->iommu_seq = ack.iommu_seq;
+	out->index = ack.index;
+	out->addr_lo = ack.addr_lo;
+	out->addr_hi = ack.addr_hi;
+	out->data = ack.data;
+	return 0;
+}
+
+/*
+ * The vector and destination live in the owner's remapping entry, not
+ * in the MSI message, so a retarget must have landed before the caller
+ * lets the device fire. Callers hold raw locks, so wait by polling.
+ */
+int mk_msi_irte_modify(u16 domain, u8 bus, u8 devfn, u32 iommu_seq,
+		       u32 index, u32 dest_apicid, u8 vector)
+{
+	struct mk_irq_resource_payload payload = {
+		.domain = domain,
+		.bus = bus,
+		.devfn = devfn,
+		.vector = vector,
+		.dest_apicid = dest_apicid,
+		.iommu_seq = iommu_seq,
+		.index = index,
+		.cookie = atomic64_inc_return(&mk_irq_cookie),
+		.sender_instance_id = root_instance->id,
+	};
+	struct mk_pending_msg *pending;
+	int ret;
+
+	pending = mk_msg_pending_add_reply(MK_MSG_RESOURCE, MK_RES_IRQ_MODIFY,
+					   payload.cookie, NULL, 0);
+	if (!pending)
+		return -ENOMEM;
+
+	ret = mk_send_message(0, MK_MSG_RESOURCE, MK_RES_IRQ_MODIFY,
+			      &payload, sizeof(payload));
+	if (ret < 0) {
+		mk_msg_pending_complete(MK_MSG_RESOURCE, MK_RES_IRQ_MODIFY,
+					payload.cookie, ret);
+		mk_msg_pending_poll(pending, 0);
+		return ret;
+	}
+
+	ret = mk_msg_pending_poll(pending, 10000);
+	if (ret < 0)
+		pr_warn("Multikernel IRQ: retarget of entry %u/%u failed: %d\n",
+			iommu_seq, index, ret);
+	return ret;
+}
+
+void mk_msi_irte_free(u32 iommu_seq, u32 index)
+{
+	struct mk_irq_resource_payload payload = {
+		.iommu_seq = iommu_seq,
+		.index = index,
+		.sender_instance_id = root_instance->id,
+	};
+
+	if (mk_send_message(0, MK_MSG_RESOURCE, MK_RES_IRQ_FREE,
+			    &payload, sizeof(payload)) < 0)
+		pr_warn("Multikernel IRQ: release of entry %u/%u not delivered\n",
+			iommu_seq, index);
 }

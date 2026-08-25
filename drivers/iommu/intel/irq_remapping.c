@@ -14,6 +14,7 @@
 #include <linux/acpi.h>
 #include <linux/irqdomain.h>
 #include <linux/crash_dump.h>
+#include <linux/multikernel.h>
 #include <asm/io_apic.h>
 #include <asm/apic.h>
 #include <asm/smp.h>
@@ -1603,3 +1604,135 @@ int dmar_ir_hotplug(struct dmar_drhd_unit *dmaru, bool insert)
 
 	return ret;
 }
+
+#ifdef CONFIG_MULTIKERNEL
+/*
+ * Interrupt mediation for multikernel instances. This kernel owns the
+ * IOMMU; an instance owns a device but cannot program remapping
+ * entries, so it asks for an entry targeting the (cpu, vector) it
+ * picked and gets back the remappable-format MSI message. The entry
+ * verifies the device's requester ID, so an instance can only fire the
+ * interrupts programmed for its own devices. The destination is always
+ * a physical APIC ID of an instance CPU, never one of this kernel's.
+ */
+bool mk_intel_ir_active(void)
+{
+	struct dmar_drhd_unit *drhd;
+	struct intel_iommu *iommu;
+
+	for_each_iommu(iommu, drhd)
+		if (iommu->ir_table)
+			return true;
+
+	return false;
+}
+
+static struct intel_iommu *mk_iommu_by_seq(u32 seq)
+{
+	struct dmar_drhd_unit *drhd;
+	struct intel_iommu *iommu;
+
+	for_each_iommu(iommu, drhd)
+		if (iommu->seq_id == seq && iommu->ir_table)
+			return iommu;
+
+	return NULL;
+}
+
+static void mk_prepare_irte(struct irte *irte, u8 vector, u32 dest_apicid)
+{
+	memset(irte, 0, sizeof(*irte));
+
+	irte->present = 1;
+	irte->dst_mode = 0;		/* Physical, the instance names an APIC ID */
+	irte->trigger_mode = 0;
+	irte->dlvry_mode = APIC_DELIVERY_MODE_FIXED;
+	irte->vector = vector;
+	irte->dest_id = IRTE_DEST(dest_apicid);
+}
+
+int mk_intel_ir_alloc(struct pci_dev *pdev, u32 dest_apicid, u8 vector,
+		      struct mk_msi_irte *out)
+{
+	struct irq_2_iommu irq_iommu = {};
+	struct dmar_drhd_unit *drhd;
+	struct intel_iommu *iommu;
+	struct msi_msg msg;
+	struct irte irte;
+	int index, ret;
+
+	drhd = dmar_find_matched_drhd_unit(pdev);
+	if (!drhd || !drhd->iommu || !drhd->iommu->ir_table)
+		return -ENODEV;
+	iommu = drhd->iommu;
+
+	index = alloc_irte(iommu, &irq_iommu, 1);
+	if (index < 0)
+		return -ENOSPC;
+
+	mk_prepare_irte(&irte, vector, dest_apicid);
+	set_msi_sid(&irte, pdev);
+	ret = modify_irte(&irq_iommu, &irte);
+	if (ret) {
+		unsigned long flags;
+
+		raw_spin_lock_irqsave(&irq_2_ir_lock, flags);
+		clear_entries(&irq_iommu);
+		raw_spin_unlock_irqrestore(&irq_2_ir_lock, flags);
+		return ret;
+	}
+
+	fill_msi_msg(&msg, index, 0);
+	out->iommu_seq = iommu->seq_id;
+	out->index = index;
+	out->addr_lo = msg.address_lo;
+	out->addr_hi = msg.address_hi;
+	out->data = msg.data;
+
+	pr_debug("MK-IR: %s IRTE %d/%d -> apic %u vector %u\n",
+		 pci_name(pdev), iommu->seq_id, index, dest_apicid, vector);
+	return 0;
+}
+
+int mk_intel_ir_modify(struct pci_dev *pdev, u32 iommu_seq, u32 index,
+		       u32 dest_apicid, u8 vector)
+{
+	struct intel_iommu *iommu = mk_iommu_by_seq(iommu_seq);
+	struct irq_2_iommu irq_iommu;
+	struct irte irte;
+
+	if (!iommu || index >= INTR_REMAP_TABLE_ENTRIES)
+		return -ENODEV;
+
+	irq_iommu = (struct irq_2_iommu){
+		.iommu = iommu,
+		.irte_index = index,
+	};
+	mk_prepare_irte(&irte, vector, dest_apicid);
+	set_msi_sid(&irte, pdev);
+
+	return modify_irte(&irq_iommu, &irte);
+}
+
+int mk_intel_ir_free(u32 iommu_seq, u32 index)
+{
+	struct intel_iommu *iommu = mk_iommu_by_seq(iommu_seq);
+	struct irq_2_iommu irq_iommu;
+	unsigned long flags;
+	int ret;
+
+	if (!iommu || index >= INTR_REMAP_TABLE_ENTRIES)
+		return -ENODEV;
+
+	irq_iommu = (struct irq_2_iommu){
+		.iommu = iommu,
+		.irte_index = index,
+	};
+
+	raw_spin_lock_irqsave(&irq_2_ir_lock, flags);
+	ret = clear_entries(&irq_iommu);
+	raw_spin_unlock_irqrestore(&irq_2_ir_lock, flags);
+
+	return ret;
+}
+#endif /* CONFIG_MULTIKERNEL */

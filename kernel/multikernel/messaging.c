@@ -10,6 +10,7 @@
 #include <linux/slab.h>
 #include <linux/spinlock.h>
 #include <linux/completion.h>
+#include <linux/delay.h>
 #include <linux/multikernel.h>
 
 /* Pending message tracking for request-response pattern */
@@ -18,6 +19,8 @@ struct mk_pending_msg {
 	u32 operation;              /* Operation subtype (e.g., MK_RES_CPU_ADD) */
 	u64 resource_id;            /* Resource identifier (physical CPU ID, PFN, etc.) */
 	int result;                 /* Operation result */
+	void *reply;                /* Optional reply data destination */
+	u32 reply_len;              /* Size of @reply */
 	struct completion done;     /* Completion for waiting */
 	struct list_head list;      /* List linkage */
 };
@@ -103,10 +106,27 @@ static void mk_message_type_ipi_callback(struct mk_ipi_data *data, void *ctx)
  */
 struct mk_pending_msg *mk_msg_pending_add(u32 msg_type, u32 operation, u64 resource_id)
 {
+	return mk_msg_pending_add_reply(msg_type, operation, resource_id, NULL, 0);
+}
+
+/**
+ * mk_msg_pending_add_reply - Register a pending operation expecting reply data
+ * @msg_type: Message type
+ * @operation: Operation subtype
+ * @resource_id: Resource identifier
+ * @reply: Where mk_msg_pending_complete_data() copies the reply payload
+ * @reply_len: Size of @reply
+ *
+ * Returns pointer to pending message structure, or NULL on failure
+ */
+struct mk_pending_msg *mk_msg_pending_add_reply(u32 msg_type, u32 operation,
+						u64 resource_id, void *reply,
+						u32 reply_len)
+{
 	struct mk_pending_msg *pending;
 	unsigned long flags;
 
-	pending = kzalloc(sizeof(*pending), GFP_KERNEL);
+	pending = kzalloc_obj(*pending, GFP_ATOMIC);
 	if (!pending)
 		return NULL;
 
@@ -114,6 +134,8 @@ struct mk_pending_msg *mk_msg_pending_add(u32 msg_type, u32 operation, u64 resou
 	pending->operation = operation;
 	pending->resource_id = resource_id;
 	pending->result = -ETIMEDOUT;  /* Default to timeout */
+	pending->reply = reply;
+	pending->reply_len = reply_len;
 	init_completion(&pending->done);
 
 	spin_lock_irqsave(&mk_pending_msgs_lock, flags);
@@ -134,6 +156,22 @@ struct mk_pending_msg *mk_msg_pending_add(u32 msg_type, u32 operation, u64 resou
  */
 void mk_msg_pending_complete(u32 msg_type, u32 operation, u64 resource_id, int result)
 {
+	mk_msg_pending_complete_data(msg_type, operation, resource_id, result,
+				     NULL, 0);
+}
+
+/**
+ * mk_msg_pending_complete_data - Complete a pending operation with reply data
+ * @msg_type: Message type
+ * @operation: Operation subtype
+ * @resource_id: Resource identifier
+ * @result: Operation result (0 = success, negative = error)
+ * @data: Reply payload to copy into the waiter's buffer, may be NULL
+ * @len: Length of @data
+ */
+void mk_msg_pending_complete_data(u32 msg_type, u32 operation, u64 resource_id,
+				  int result, const void *data, u32 len)
+{
 	struct mk_pending_msg *pending;
 	unsigned long flags;
 
@@ -142,6 +180,9 @@ void mk_msg_pending_complete(u32 msg_type, u32 operation, u64 resource_id, int r
 		if (pending->msg_type == msg_type &&
 		    pending->operation == operation &&
 		    pending->resource_id == resource_id) {
+			if (pending->reply && data)
+				memcpy(pending->reply, data,
+				       min(len, pending->reply_len));
 			pending->result = result;
 			complete(&pending->done);
 			break;
@@ -157,6 +198,33 @@ void mk_msg_pending_complete(u32 msg_type, u32 operation, u64 resource_id, int r
  *
  * Returns operation result (0 = success, negative = error or timeout)
  */
+/**
+ * mk_msg_pending_poll - Busy-wait for a pending operation, atomic-safe
+ * @pending: Pending message structure
+ * @timeout_us: Timeout in microseconds
+ *
+ * For waiters that cannot sleep, such as irq domain activation and
+ * affinity changes. Returns the operation result or -ETIMEDOUT.
+ */
+int mk_msg_pending_poll(struct mk_pending_msg *pending, unsigned int timeout_us)
+{
+	unsigned int waited = 0;
+	unsigned long flags;
+	int result;
+
+	while (!completion_done(&pending->done) && waited++ < timeout_us)
+		udelay(1);
+
+	result = completion_done(&pending->done) ? pending->result : -ETIMEDOUT;
+
+	spin_lock_irqsave(&mk_pending_msgs_lock, flags);
+	list_del(&pending->list);
+	spin_unlock_irqrestore(&mk_pending_msgs_lock, flags);
+	kfree(pending);
+
+	return result;
+}
+
 int mk_msg_pending_wait(struct mk_pending_msg *pending, unsigned long timeout_ms)
 {
 	unsigned long timeout = msecs_to_jiffies(timeout_ms);

@@ -1448,9 +1448,16 @@ static int mk_dt_emit_host_bridges(struct mk_instance *instance, void *fdt)
  */
 LIST_HEAD(mk_pci_host_bridges);
 
+bool mk_msi_mediated;
+
 int __init mk_dt_parse_host_bridges(const void *fdt)
 {
 	int node;
+
+	mk_msi_mediated = fdt_getprop(fdt, 0, "multikernel,mediated-msi",
+				      NULL) != NULL;
+	if (mk_msi_mediated)
+		pr_info("Device MSI messages are mediated by the spawning kernel\n");
 
 	fdt_for_each_subnode(node, fdt, 0) {
 		struct mk_pci_host_bridge *bridge;
@@ -1548,6 +1555,13 @@ static int mk_dt_emit_instance(struct mk_instance *instance, void *fdt,
 		ret = fdt_property_string(fdt, "compatible", "multikernel-v1");
 	if (!ret)
 		ret = fdt_property_u32(fdt, "id", instance->id);
+	/*
+	 * With interrupt remapping active, a device MSI composed without
+	 * this kernel's help is blocked by the IOMMU, so tell the
+	 * instance its MSI messages come from here.
+	 */
+	if (!ret && instance != root_instance && mk_intel_ir_active())
+		ret = fdt_property(fdt, "multikernel,mediated-msi", NULL, 0);
 	if (!ret)
 		ret = fdt_begin_node(fdt, "resources");
 	if (ret)
