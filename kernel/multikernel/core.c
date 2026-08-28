@@ -1392,17 +1392,29 @@ static void mk_shutdown_work_fn(struct work_struct *work)
  * it corrupts the single-producer mailbox. The kexec path confirms the
  * CPUs are parked before it rewrites the image.
  */
-static void mk_instance_settle_halted(struct mk_instance *instance)
+static int mk_instance_settle_halted(struct mk_instance *instance)
 {
+	int ret;
+
+	ret = mk_instance_confirm_parked(instance);
+	if (ret) {
+		pr_err("Instance %d (%s) reported halted before every CPU stopped\n",
+		       instance->id, instance->name);
+		return ret;
+	}
+
 	pr_info("Instance %d (%s) halted, CPUs parking in pool\n",
 		instance->id, instance->name);
 	mk_instance_set_state(instance, MK_STATE_LOADED);
+	return 0;
 }
 
 struct mk_halted_work {
 	struct work_struct work;
 	int instance_id;
 };
+
+static bool mk_force_stop_available;
 
 static void mk_halted_work_fn(struct work_struct *work)
 {
@@ -1412,7 +1424,9 @@ static void mk_halted_work_fn(struct work_struct *work)
 
 	instance = mk_instance_find(aw->instance_id);
 	if (instance) {
-		mk_instance_settle_halted(instance);
+		if (mk_instance_settle_halted(instance))
+			pr_err("Failed to settle halted instance %d\n",
+			       aw->instance_id);
 		mk_instance_put(instance);
 	} else {
 		pr_warn("Shutdown ACK from unknown instance %d\n",
@@ -1536,12 +1550,10 @@ int multikernel_halt_by_id(int mk_id)
 
 	ret = mk_msg_pending_wait(pending, 30000);
 	if (ret == 0) {
-		if (mk_instance_confirm_parked(instance))
-			pr_warn("Multikernel instance %d halted with CPUs unaccounted for\n",
+		ret = mk_instance_settle_halted(instance);
+		if (!ret)
+			pr_info("Multikernel instance %d halted (graceful)\n",
 				mk_id);
-
-		mk_instance_set_state(instance, MK_STATE_LOADED);
-		pr_info("Multikernel instance %d halted (graceful)\n", mk_id);
 	}
 
 	mk_instance_put(instance);
@@ -1576,6 +1588,9 @@ int multikernel_force_halt_by_id(int mk_id)
 	unsigned int i;
 	int cpu_count = 0;
 	int ret;
+
+	if (!mk_force_stop_available)
+		return -EOPNOTSUPP;
 
 	instance = mk_instance_find(mk_id);
 	if (!instance)
@@ -1620,9 +1635,9 @@ int multikernel_force_halt_by_id(int mk_id)
 	 * for them to arrive before reporting the instance re-spawnable,
 	 * exactly as the graceful path does after its shutdown ACK.
 	 */
-	mk_instance_settle_halted(instance);
+	ret = mk_instance_settle_halted(instance);
 	mk_instance_put(instance);
-	return 0;
+	return ret;
 }
 
 static int __init multikernel_init(void)
@@ -1633,6 +1648,8 @@ static int __init multikernel_init(void)
 	if (ret < 0) {
 		pr_warn("No force stop handler: %d (force halt unavailable)\n", ret);
 		/* Continue anyway - graceful shutdown still works */
+	} else {
+		mk_force_stop_available = true;
 	}
 
 	ret = mk_messaging_init();
