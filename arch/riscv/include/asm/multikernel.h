@@ -46,6 +46,8 @@ struct mk_instance_arch {
 	phys_addr_t ctx_phys;
 	const void *stub;
 	phys_addr_t stub_phys;
+	void *fdt;
+	phys_addr_t fdt_phys;
 };
 
 extern char mk_riscv_entry_stub_start[];

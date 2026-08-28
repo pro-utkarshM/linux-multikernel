@@ -36,6 +36,14 @@ machine_kexec_prepare(struct kimage *image)
 	unsigned int control_code_buffer_sz = 0;
 	int i = 0;
 
+	if (image->type == KEXEC_TYPE_MULTIKERNEL) {
+		if (!internal->fdt || fdt_check_header(internal->fdt)) {
+			pr_err("Multikernel image has no valid device tree\n");
+			return -EINVAL;
+		}
+		return 0;
+	}
+
 	/* Find the Flattened Device Tree and save its physical address */
 	for (i = 0; i < image->nr_segments; i++) {
 		if (image->segment[i].memsz <= sizeof(fdt))
@@ -57,9 +65,6 @@ machine_kexec_prepare(struct kimage *image)
 		pr_err("Device tree not included in the provided image\n");
 		return -EINVAL;
 	}
-	if (image->type == KEXEC_TYPE_MULTIKERNEL)
-		return 0;
-
 	/* Copy the assembler code for relocation to the control page */
 	if (image->type != KEXEC_TYPE_CRASH) {
 		control_code_buffer = page_address(image->control_code_page);
