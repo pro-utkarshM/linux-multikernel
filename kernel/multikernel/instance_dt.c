@@ -389,14 +389,13 @@ static struct mk_instance * __init mk_restore_host_instance(void)
  * mk_instance_restore_from_manifest() - Restore this instance from the manifest
  *
  * Called during multikernel initialization in the spawned kernel to restore
- * the single DTB the host kernel placed in the manifest. The spawned
- * kernel receives exactly one DTB and parses the instance ID from it.
+ * the instance DTB the host kernel placed in the manifest.
  *
  * Returns: 0 on success, negative error code on failure
  */
 int __init mk_instance_restore_from_manifest(void)
 {
-	const void *dtb_virt;
+	void *dtb_virt;
 	int dtb_len;
 	int ret, cpu;
 	char cpus_buf[256];
@@ -430,23 +429,17 @@ int __init mk_instance_restore_from_manifest(void)
 		return 0;
 	}
 
-	/*
-	 * The manifest is this kernel's boot device tree; the OF core keeps
-	 * the flattened copy it unflattened, so parse that one.
-	 */
-	dtb_virt = initial_boot_params;
-	if (!dtb_virt || !of_have_populated_dt()) {
-		pr_err("Boot device tree from the manifest was not unflattened\n");
-		return -ENOENT;
-	}
+	dtb_virt = memremap(mk_manifest_phys(), PAGE_SIZE, MEMREMAP_WB);
+	if (!dtb_virt)
+		return -ENOMEM;
 	dtb_len = fdt_totalsize(dtb_virt);
 
-	pr_info("Restoring instance from the boot device tree (%d bytes)\n", dtb_len);
+	pr_info("Restoring instance from the manifest (%d bytes)\n", dtb_len);
 
 	ret = mk_dt_extract_instance_info(dtb_virt, dtb_len, &instance_id, &instance_name);
 	if (ret) {
 		pr_err("Failed to extract instance info from DTB: %d\n", ret);
-		return ret;
+		goto unmap_manifest;
 	}
 
 	pr_info("DTB contains instance ID %d, name '%s'\n", instance_id, instance_name);
@@ -502,9 +495,10 @@ int __init mk_instance_restore_from_manifest(void)
 	else
 		mk_parent_instance = host_instance;
 
-	pr_info("Successfully restored multikernel root instance %d ('%s') from the boot tree (%d bytes)\n",
+	pr_info("Successfully restored multikernel root instance %d ('%s') from the manifest (%d bytes)\n",
 		instance_id, instance_name, dtb_len);
 	mk_dt_config_free(&config);
+	memunmap(dtb_virt);
 	return 0;
 
 cleanup_devices:
@@ -528,6 +522,8 @@ cleanup_instance_name:
 	kfree(instance);
 config_free:
 	mk_dt_config_free(&config);
+unmap_manifest:
+	memunmap(dtb_virt);
 	return ret;
 }
 

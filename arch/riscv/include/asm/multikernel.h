@@ -29,12 +29,12 @@ static inline int arch_cpu_from_physical_id(u64 hartid)
 }
 
 /*
- * The RISC-V spawn path will use one page for its context, up to 64 KiB
- * for the generated DTB, and one page for the fence.i entry stub. SBI HSM
- * starts a hart in the existing address space, so no trampoline page tables
- * are needed.
+ * The RISC-V spawn path uses one page for its context, one page for the
+ * fence.i entry stub, up to 64 KiB for the generated DTB, and one page for
+ * the manifest. SBI HSM starts a hart in the existing address space, so no
+ * trampoline page tables are needed.
  */
-#define MK_CTRL_BLOCK_SIZE	(SZ_64K + 2 * PAGE_SIZE)
+#define MK_CTRL_BLOCK_SIZE	(SZ_64K + 3 * PAGE_SIZE)
 
 struct mk_riscv_spawn_context {
 	unsigned long image_entry;
@@ -46,6 +46,10 @@ struct mk_instance_arch {
 	phys_addr_t ctx_phys;
 	const void *stub;
 	phys_addr_t stub_phys;
+	void *fdt;
+	phys_addr_t fdt_phys;
+	void *manifest;
+	phys_addr_t manifest_phys;
 };
 
 extern char mk_riscv_entry_stub_start[];

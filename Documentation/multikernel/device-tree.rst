@@ -213,6 +213,10 @@ tree be finished at exec rather than at load. The kernel unflattens it
 before parsing its SMP configuration, so CPU registration, the rings and
 everything else read the tree through the usual ``of_*`` helpers.
 
+RISC-V must instead boot with the platform DTB required by the architecture.
+Its ``/chosen`` node carries the handoff properties above and a
+``linux,multikernel-fdt`` pointer to the separate instance manifest.
+
 What a spawn does with its tree:
 
 * creates a PCI root bus per ``multikernel,pci-host-bridge`` node, with

@@ -6,13 +6,13 @@
  * It is the instance's tree as the host generates it, with a /chosen
  * node carrying what only the boot handoff knows: the pool CPUs the
  * instance may receive later and the message ring addresses in both
- * directions. The spawn's OF core unflattens it like a tree from a
- * bootloader, so everything in it is read with the usual of_* helpers.
+ * directions. Architectures either boot from it or expose its handoff
+ * properties in their platform tree.
  *
- * The manifest travels on multikernel's own boot channel (a dedicated
- * setup_data type on x86, pointing at the tree), separate from KHO: a
- * spawn kernel may use the real KHO channel for its own live update
- * within its partition.
+ * The manifest travels on multikernel's own boot channel, separate from
+ * KHO: x86 boots from it through setup_data, while RISC-V receives its
+ * address alongside the platform DTB. A spawn kernel may use the real KHO
+ * channel for its own live update within its partition.
  */
 
 #include <linux/kernel.h>

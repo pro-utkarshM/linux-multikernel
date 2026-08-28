@@ -11,6 +11,7 @@
 #include <linux/slab.h>
 #include <linux/of.h>
 #include <linux/libfdt.h>
+#include <linux/sizes.h>
 #include <linux/types.h>
 #include <linux/memblock.h>
 #include <linux/vmalloc.h>
@@ -354,7 +355,21 @@ int load_extra_segments(struct kimage *image, unsigned long kernel_start,
 		goto out;
 	}
 
-	fdt_pack(fdt);
+	ret = fdt_pack(fdt);
+	if (ret)
+		goto out_free_fdt;
+
+	if (image->type == KEXEC_TYPE_MULTIKERNEL) {
+		if (fdt_totalsize(fdt) > SZ_64K) {
+			pr_err("Multikernel DTB exceeds the 64 KiB control-block slot\n");
+			ret = -E2BIG;
+			goto out_free_fdt;
+		}
+
+		image->arch.fdt = fdt;
+		goto out;
+	}
+
 	kbuf.buffer = fdt;
 	kbuf.bufsz = kbuf.memsz = fdt_totalsize(fdt);
 	kbuf.buf_align = PAGE_SIZE;
