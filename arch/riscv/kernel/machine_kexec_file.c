@@ -311,21 +311,24 @@ int load_extra_segments(struct kimage *image, unsigned long kernel_start,
 #endif
 
 #ifdef CONFIG_ARCH_SUPPORTS_KEXEC_PURGATORY
-	/* Add purgatory to the image */
-	kbuf.top_down = true;
-	kbuf.mem = KEXEC_BUF_MEM_UNKNOWN;
-	ret = kexec_load_purgatory(image, &kbuf);
-	if (ret) {
-		pr_err("Error loading purgatory ret=%d\n", ret);
-		goto out;
-	}
-	kexec_dprintk("Loaded purgatory at 0x%lx\n", kbuf.mem);
+	if (image->type != KEXEC_TYPE_MULTIKERNEL) {
+		/* Add purgatory to the image */
+		kbuf.top_down = true;
+		kbuf.mem = KEXEC_BUF_MEM_UNKNOWN;
+		ret = kexec_load_purgatory(image, &kbuf);
+		if (ret) {
+			pr_err("Error loading purgatory ret=%d\n", ret);
+			goto out;
+		}
+		kexec_dprintk("Loaded purgatory at 0x%lx\n", kbuf.mem);
 
-	ret = kexec_purgatory_get_set_symbol(image, "riscv_kernel_entry",
-					     &kernel_start,
-					     sizeof(kernel_start), 0);
-	if (ret)
-		pr_err("Error update purgatory ret=%d\n", ret);
+		ret = kexec_purgatory_get_set_symbol(image,
+						     "riscv_kernel_entry",
+						     &kernel_start,
+						     sizeof(kernel_start), 0);
+		if (ret)
+			pr_err("Error update purgatory ret=%d\n", ret);
+	}
 #endif /* CONFIG_ARCH_SUPPORTS_KEXEC_PURGATORY */
 
 	/* Add the initrd to the image */

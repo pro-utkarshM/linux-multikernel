@@ -57,6 +57,8 @@ machine_kexec_prepare(struct kimage *image)
 		pr_err("Device tree not included in the provided image\n");
 		return -EINVAL;
 	}
+	if (image->type == KEXEC_TYPE_MULTIKERNEL)
+		return 0;
 
 	/* Copy the assembler code for relocation to the control page */
 	if (image->type != KEXEC_TYPE_CRASH) {

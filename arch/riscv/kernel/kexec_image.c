@@ -11,6 +11,7 @@
 #include <linux/kernel.h>
 #include <linux/kexec.h>
 #include <linux/pe.h>
+#include <linux/sizes.h>
 #include <linux/string.h>
 #include <asm/byteorder.h>
 #include <asm/image.h>
@@ -39,14 +40,21 @@ static void *image_load(struct kimage *image,
 			char *cmdline, unsigned long cmdline_len)
 {
 	struct riscv_image_header *h;
-	u64 flags;
+	u64 flags, image_size, text_offset;
 	bool be_image, be_kernel;
 	struct kexec_buf kbuf = {};
 	int ret;
 
 	/* Check Image header */
 	h = (struct riscv_image_header *)kernel;
-	if (!h->image_size) {
+	image_size = le64_to_cpu(h->image_size);
+	text_offset = le64_to_cpu(h->text_offset);
+	if (!image_size || kernel_len > image_size) {
+		ret = -EINVAL;
+		goto out;
+	}
+	if (image->type == KEXEC_TYPE_MULTIKERNEL && text_offset != SZ_2M) {
+		pr_err("Multikernel RV64 Image requires a 2 MiB text offset\n");
 		ret = -EINVAL;
 		goto out;
 	}
@@ -69,12 +77,18 @@ static void *image_load(struct kimage *image,
 	kbuf.buffer = kernel;
 	kbuf.bufsz = kernel_len;
 	kbuf.mem = KEXEC_BUF_MEM_UNKNOWN;
-	kbuf.memsz = le64_to_cpu(h->image_size);
-	kbuf.buf_align = le64_to_cpu(h->text_offset);
+	kbuf.memsz = image_size;
+	kbuf.buf_align = text_offset;
 
 	ret = kexec_add_buffer(&kbuf);
 	if (ret) {
 		pr_err("Error add kernel image ret=%d\n", ret);
+		goto out;
+	}
+	if (image->type == KEXEC_TYPE_MULTIKERNEL &&
+	    !IS_ALIGNED(kbuf.mem, SZ_2M)) {
+		pr_err("Multikernel Image is not 2 MiB aligned\n");
+		ret = -EINVAL;
 		goto out;
 	}
 

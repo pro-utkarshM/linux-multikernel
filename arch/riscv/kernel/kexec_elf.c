@@ -117,6 +117,11 @@ static void *elf_kexec_load(struct kimage *image, char *kernel_buf,
 	struct elfhdr ehdr;
 	struct kexec_elf_info elf_info;
 
+	if (image->type == KEXEC_TYPE_MULTIKERNEL) {
+		pr_err("Multikernel requires a flat RISC-V Image\n");
+		return ERR_PTR(-EOPNOTSUPP);
+	}
+
 	ret = kexec_build_elf_info(kernel_buf, kernel_len, &ehdr, &elf_info);
 	if (ret)
 		return ERR_PTR(ret);
