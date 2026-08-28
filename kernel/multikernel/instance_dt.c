@@ -10,6 +10,7 @@
 
 #include <linux/kernel.h>
 #include <linux/slab.h>
+#include <linux/smp.h>
 #include <linux/mutex.h>
 #include <linux/list.h>
 #include <linux/multikernel.h>
@@ -168,6 +169,7 @@ int mk_manifest_add_instance_dtb(struct kimage *image, void *fdt, int mk_id)
  */
 int mk_manifest_add_host_ipi(struct kimage *image, void *fdt)
 {
+	mk_phys_cpu_t doorbell_cpu;
 	int ret = 0;
 
 	if (!root_instance->ipi_data) {
@@ -175,12 +177,15 @@ int mk_manifest_add_host_ipi(struct kimage *image, void *fdt)
 		return 0;
 	}
 
-	pr_info("Preserving host IPI buffer: phys=0x%llx, pages=%u\n",
-		(unsigned long long)root_instance->ipi_phys, root_instance->ipi_pages);
+	doorbell_cpu = arch_cpu_physical_id(get_boot_cpu_id());
+	pr_info("Preserving host IPI buffer: phys=0x%llx, pages=%u, CPU=%llu\n",
+		(unsigned long long)root_instance->ipi_phys,
+		root_instance->ipi_pages, doorbell_cpu);
 
 	ret |= fdt_begin_node(fdt, "host-ipi-buffer");
 	ret |= fdt_property_u64(fdt, "phys-addr", root_instance->ipi_phys);
 	ret |= fdt_property_u32(fdt, "pages", root_instance->ipi_pages);
+	ret |= fdt_property_u64(fdt, "doorbell-cpu", doorbell_cpu);
 	ret |= fdt_end_node(fdt);
 
 	if (ret) {
@@ -564,9 +569,12 @@ static struct mk_instance * __init mk_restore_host_instance(const void *manifest
 	struct mk_instance *host_instance;
 	int host_ipi_node;
 	const fdt64_t *phys_prop;
+	const fdt64_t *cpu_prop;
 	const fdt32_t *pages_prop;
+	mk_phys_cpu_t host_doorbell_cpu = 0;
 	phys_addr_t host_ipi_phys = 0;
 	u32 host_ipi_pages = 0;
+	bool have_doorbell_cpu = false;
 	size_t host_ipi_size = 0;
 	int len;
 
@@ -585,10 +593,16 @@ static struct mk_instance * __init mk_restore_host_instance(const void *manifest
 		host_ipi_pages = fdt32_to_cpu(*pages_prop);
 		host_ipi_size = (size_t)host_ipi_pages << PAGE_SHIFT;
 	}
+	cpu_prop = fdt_getprop(manifest, host_ipi_node, "doorbell-cpu", &len);
+	if (cpu_prop && len == sizeof(*cpu_prop)) {
+		host_doorbell_cpu = fdt64_to_cpu(*cpu_prop);
+		have_doorbell_cpu = true;
+	}
 
-	if (!host_ipi_phys || !host_ipi_pages) {
-		pr_warn("Incomplete host IPI buffer info (phys=0x%llx, pages=%u)\n",
-			(unsigned long long)host_ipi_phys, host_ipi_pages);
+	if (!host_ipi_phys || !host_ipi_pages || !have_doorbell_cpu) {
+		pr_warn("Incomplete host IPI buffer info (phys=0x%llx, pages=%u, CPU=%s)\n",
+			(unsigned long long)host_ipi_phys, host_ipi_pages,
+			have_doorbell_cpu ? "present" : "missing");
 		return NULL;
 	}
 
@@ -596,8 +610,7 @@ static struct mk_instance * __init mk_restore_host_instance(const void *manifest
 	if (!host_instance)
 		return NULL;
 
-	/* Set physical CPU 0 as default target for host IPIs */
-	if (mk_cpu_set_add(host_instance->cpus, 0)) {
+	if (mk_cpu_set_add(host_instance->cpus, host_doorbell_cpu)) {
 		kfree(host_instance->name);
 		mk_cpu_set_free(host_instance->cpus);
 		kfree(host_instance);
