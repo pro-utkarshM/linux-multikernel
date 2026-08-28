@@ -213,3 +213,26 @@ The new kernfs interface has the following restrictions:
 - **No direct DTB upload to instances**: Instances don't have writable ``device_tree`` files
 - **Centralized DTB management**: All instances must be created via the root ``device_tree`` file
 - **Read-only instance files**: All instance attributes are read-only for consistency
+
+RISC-V entry stub
+=================
+
+OpenSBI ``HART_START`` does not invalidate a stopped hart's instruction
+cache, and RFENCE cannot target that hart.  The host therefore copies one
+immutable entry stub into its control block.  The stub begins with ``fence.i``
+before loading the current entry from the preceding context page and jumping
+to it.  It preserves the boot ABI registers ``a0`` and ``a1``.
+
+The multikernel manifest advertises the stub address to the spawn kernel.
+Before starting a secondary hart, the spawn kernel changes the context entry
+to ``secondary_start_sbi`` and passes the normal per-CPU boot data in ``a1``.
+Thus every HSM start reaches the immutable stub before entering replaceable
+Image code; the primary still receives its DTB and secondaries still receive
+their SBI boot data.
+
+Every local HSM stop path also executes ``fence.i`` immediately before the
+hart enters firmware, so the stub's first fetch cannot reuse an older line.
+
+Respawns update only the host-owned entry data, never the copied instructions.
+The immutable stub can safely execute from a stale cache long enough to run
+``fence.i``, which makes the newly written Image visible before the jump.
