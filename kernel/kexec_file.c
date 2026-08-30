@@ -356,7 +356,7 @@ kimage_file_alloc_init(struct kimage **rimage, int kernel_fd,
 		if (!fdt_page) {
 			pr_err("Failed to allocate FDT page for multikernel kimage\n");
 			ret = -ENOMEM;
-			goto out_free_image;
+			goto out_free_multikernel;
 		}
 		image->mk_manifest = page_to_phys(fdt_page);
 
@@ -372,7 +372,7 @@ kimage_file_alloc_init(struct kimage **rimage, int kernel_fd,
 				pr_err("Failed to allocate %zu bytes (order %u) for IPI buffer\n",
 				       ipi_buffer_size, order);
 				ret = -ENOMEM;
-				goto out_free_fdt;
+				goto out_free_multikernel;
 			}
 			image->mk_ipi = page_to_phys(ipi_page);
 
@@ -384,7 +384,7 @@ kimage_file_alloc_init(struct kimage **rimage, int kernel_fd,
 	ret = kimage_file_prepare_segments(image, kernel_fd, initrd_fd,
 					   cmdline_ptr, cmdline_len, flags);
 	if (ret)
-		goto out_free_image;
+		goto out_free_multikernel;
 
 	ret = sanity_check_segment_list(image);
 	if (ret)
@@ -412,10 +412,17 @@ out_free_control_pages:
 	kimage_free_page_list(&image->control_pages);
 out_free_post_load_bufs:
 	kimage_file_post_load_cleanup(image);
-out_free_fdt:
+out_free_multikernel:
 	if (image->type == KEXEC_TYPE_MULTIKERNEL) {
+		unsigned long i;
+
+		for (i = 0; i < image->nr_segments; i++)
+			mk_kimage_free(image,
+				       phys_to_virt(image->segment[i].mem),
+				       image->segment[i].memsz);
 		if (image->mk_ipi) {
 			unsigned int order = get_order(sizeof(struct mk_shared_data));
+
 			__free_pages(phys_to_page(image->mk_ipi), order);
 			image->mk_ipi = 0;
 		}
@@ -425,11 +432,9 @@ out_free_fdt:
 		}
 		if (image->mk_instance) {
 			image->mk_instance->kimage = NULL;
-			mk_instance_put(image->mk_instance);
 			image->mk_instance = NULL;
 		}
 	}
-out_free_image:
 	kfree(image);
 	return ret;
 }
