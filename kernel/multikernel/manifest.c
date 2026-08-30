@@ -89,6 +89,12 @@ void __init mk_manifest_populate(phys_addr_t fdt_phys, u64 fdt_len)
 	pr_info("multikernel: processing manifest at 0x%llx (size: %llu)\n",
 		fdt_phys, fdt_len);
 
+	if (fdt_len < sizeof(struct fdt_header)) {
+		err = -EINVAL;
+		pr_warn("multikernel: manifest is shorter than its header\n");
+		goto out;
+	}
+
 	fdt = early_memremap(fdt_phys, fdt_len);
 	if (!fdt) {
 		pr_warn("multikernel: failed to memremap manifest (0x%llx)\n",
@@ -97,6 +103,8 @@ void __init mk_manifest_populate(phys_addr_t fdt_phys, u64 fdt_len)
 	}
 
 	err = fdt_check_header(fdt);
+	if (!err && fdt_totalsize(fdt) > fdt_len)
+		err = -FDT_ERR_TRUNCATED;
 	if (err) {
 		pr_warn("multikernel: manifest (0x%llx) is invalid: %d\n",
 			fdt_phys, err);
