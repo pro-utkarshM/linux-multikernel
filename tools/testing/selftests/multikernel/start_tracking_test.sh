@@ -13,7 +13,9 @@ sed '/^#include /d' "$src/kernel/multikernel/cpuset.c" > "$build/cpuset.h"
 awk '/^int mk_instance_confirm_parked\(/ { copy = 1 }
      copy { print }
      copy && /^}/ { copy = 0 }' "$src/kernel/multikernel/core.c" > "$build/confirm.h"
-awk '/^(static )?int mk_(riscv_track_cpu|arch_spawn_instance|arch_release_instance|arch_confirm_parked|repark_instance_to_host|repark_cpu_to_instance|repark_cpu_to_host)\(/ { copy = 1 }
+awk '/^static int mk_riscv_track_cpu\(/ ||
+     /^int mk_arch_(spawn_instance|release_instance|confirm_parked)\(/ ||
+     /^int mk_repark_(instance_to_host|cpu_to_instance|cpu_to_host)\(/ { copy = 1 }
      copy { print }
      copy && /^}/ { copy = 0 }' "$src/arch/riscv/multikernel/spawn.c" > "$build/start.h"
 ${CC:-cc} -std=gnu11 -Wall -Wextra -Werror -Wno-unused-parameter \

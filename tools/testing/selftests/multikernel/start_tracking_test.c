@@ -100,6 +100,6 @@ int main(void)
 	assert(!mk_cpu_set_contains(target.cpus_on_slot, 100009));
 	assert(!mk_arch_release_instance(&target));
 	mk_cpu_set_free(target.cpus);
-	puts("PASS: all-hart tracking precedes start, allocation failure and failed release retain safety");
+	puts("PASS: all-hart tracking precedes start; failures retain tracking");
 	return 0;
 }
