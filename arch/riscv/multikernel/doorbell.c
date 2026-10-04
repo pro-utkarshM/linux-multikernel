@@ -13,6 +13,7 @@ static bool mk_receiver_ready;
 
 void mk_riscv_notify_parent_halted(void)
 {
+	/* Pair with init's publication of the pinned parent endpoint. */
 	struct mk_instance *parent = smp_load_acquire(&mk_parent_endpoint);
 	struct mk_shared_data *data;
 	struct mk_ipi_data *slot;
@@ -41,7 +42,8 @@ void mk_riscv_notify_parent_halted(void)
 	for (attempt = 0; attempt < 3; attempt++) {
 		head = atomic_read(&data->ring.head) & (MK_IPI_RING_SIZE - 1);
 		next = (head + 1) & (MK_IPI_RING_SIZE - 1);
-		tail = atomic_read(&data->ring.tail) & (MK_IPI_RING_SIZE - 1);
+		/* Pair with the consumer's release of cleared slot capacity. */
+		tail = atomic_read_acquire(&data->ring.tail) & (MK_IPI_RING_SIZE - 1);
 		if (next == tail)
 			goto out;
 		if (atomic_cmpxchg(&data->ring.head, head, next) == head)
@@ -58,6 +60,7 @@ void mk_riscv_notify_parent_halted(void)
 	slot->sender_cpu = arch_cpu_physical_id(smp_processor_id());
 	slot->type = MK_MSG_SYSTEM;
 	memcpy(slot->buffer, buffer, sizeof(buffer));
+	/* Publish the entire slot before the consumer observes its size. */
 	smp_store_release(&slot->data_size, sizeof(buffer));
 	published = true;
 out:
@@ -98,13 +101,15 @@ static int __init mk_riscv_doorbell_init(void)
 {
 	int state;
 
-	state = cpuhp_setup_state_nocalls(CPUHP_BP_PREPARE_DYN,
-					 "multikernel/sbi:receiver", NULL,
-					 mk_riscv_receiver_offline);
+	state = cpuhp_setup_state_nocalls(CPUHP_AP_ONLINE_DYN,
+					"multikernel/sbi:receiver", NULL,
+					mk_riscv_receiver_offline);
 	if (state < 0)
 		return state;
-	if (host_instance)
+	if (host_instance) {
+		/* Publish the held reference before panic can use the endpoint. */
 		smp_store_release(&mk_parent_endpoint, mk_instance_get(host_instance));
+	}
 	WRITE_ONCE(mk_receiver_ready, true);
 	return 0;
 }

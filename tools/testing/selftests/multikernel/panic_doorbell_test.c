@@ -38,6 +38,7 @@ static atomic_t mk_halt_notice;
 static unsigned int sends, cas_calls;
 static bool irq_disabled;
 static unsigned int atomic_read(atomic_t *p) { return p->value; }
+static unsigned int atomic_read_acquire(atomic_t *p) { return p->value; }
 static unsigned int atomic_cmpxchg(atomic_t *p, unsigned int old, unsigned int new)
 {
 	unsigned int actual = p->value;
