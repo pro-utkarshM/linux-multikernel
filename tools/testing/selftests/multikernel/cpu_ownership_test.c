@@ -236,9 +236,12 @@ static void reset(void)
 
 static void retained(void)
 {
-	expect("CPU remains owned by target", mk_cpu_set_contains(target.cpus, test_cpu), 1);
-	expect("uncertain CPU is not assignable", mk_cpu_set_contains(pool.cpus, test_cpu), 0);
-	expect("uncertain handoff remains tracked", mk_cpu_set_contains(target.cpus_on_slot, test_cpu), 1);
+	expect("CPU remains owned by target",
+	       mk_cpu_set_contains(target.cpus, test_cpu), 1);
+	expect("uncertain CPU is not assignable",
+	       mk_cpu_set_contains(pool.cpus, test_cpu), 0);
+	expect("uncertain handoff remains tracked",
+	       mk_cpu_set_contains(target.cpus_on_slot, test_cpu), 1);
 	expect("pending waiter cleaned up", live_pending, 0);
 	expect("instance reference released", references, 0);
 }
@@ -256,25 +259,32 @@ int main(void)
 
 	reset();
 	fail_alloc = true;
-	expect("pending allocation fails before handoff", mk_send_cpu_add(2, test_cpu, 0, 0), -ENOMEM);
+	expect("pending allocation fails before handoff",
+	       mk_send_cpu_add(2, test_cpu, 0, 0), -ENOMEM);
 	expect("allocation failure never wakes CPU", wakes, 0);
-	expect("allocation failure leaves pool ownership", mk_cpu_set_contains(pool.cpus, test_cpu), 1);
+	expect("allocation failure leaves pool ownership",
+	       mk_cpu_set_contains(pool.cpus, test_cpu), 1);
 	expect("allocation failure leaves target empty", target.cpus->nr, 0);
 
 	reset();
 	fail_set_alloc = true;
-	expect("ownership reservation fails before handoff", mk_send_cpu_add(2, test_cpu, 0, 0), -ENOMEM);
+	expect("ownership reservation fails before handoff",
+	       mk_send_cpu_add(2, test_cpu, 0, 0), -ENOMEM);
 	expect("reservation failure never wakes CPU", wakes, 0);
-	expect("reservation failure leaves pool ownership", mk_cpu_set_contains(pool.cpus, test_cpu), 1);
+	expect("reservation failure leaves pool ownership",
+	       mk_cpu_set_contains(pool.cpus, test_cpu), 1);
 	expect("reservation failure cleans pending", live_pending, 0);
 
 	reset();
 	assert(!mk_cpu_set_reserve(target.cpus, 1));
 	fail_set_alloc = true;
-	expect("tracking allocation fails before publication", mk_send_cpu_add(2, test_cpu, 0, 0), -ENOMEM);
+	expect("tracking allocation fails before publication",
+	       mk_send_cpu_add(2, test_cpu, 0, 0), -ENOMEM);
 	expect("tracking allocation failure never wakes CPU", wakes, 0);
-	expect("preowned CPU retained on tracking failure", mk_cpu_set_contains(target.cpus, test_cpu), 1);
-	expect("tracking failure does not make CPU assignable", mk_cpu_set_contains(pool.cpus, test_cpu), 0);
+	expect("preowned CPU retained on tracking failure",
+	       mk_cpu_set_contains(target.cpus, test_cpu), 1);
+	expect("tracking failure does not make CPU assignable",
+	       mk_cpu_set_contains(pool.cpus, test_cpu), 0);
 	expect("tracking failure cancels pending", live_pending, 0);
 
 	reset();
@@ -285,7 +295,8 @@ int main(void)
 
 	reset();
 	send_error = -ENOSPC;
-	expect("transport failure after handoff", mk_send_cpu_add(2, test_cpu, 0, 0), -ENOSPC);
+	expect("transport failure after handoff",
+	       mk_send_cpu_add(2, test_cpu, 0, 0), -ENOSPC);
 	retained();
 	expect("transport failure does not guess rollback", wakes, 1);
 
@@ -302,25 +313,29 @@ int main(void)
 
 	reset();
 	fail_after_wake = true;
-	expect("no late ownership or waiter allocation", mk_send_cpu_add(2, test_cpu, 0, 0), 0);
+	expect("no late ownership or waiter allocation",
+	       mk_send_cpu_add(2, test_cpu, 0, 0), 0);
 	retained();
 
 	reset();
 	assert(!mk_instance_transfer_cpus(&target, pool.cpus));
 	assert(!mk_cpu_set_add(target.cpus_on_slot, test_cpu));
 	wake_fail_at = 1;
-	expect("remove cannot reclaim on repark timeout", mk_send_cpu_remove(2, test_cpu), -ETIMEDOUT);
+	expect("remove cannot reclaim on repark timeout",
+	       mk_send_cpu_remove(2, test_cpu), -ETIMEDOUT);
 	retained();
 	wake_fail_at = 0;
 	expect("confirmed repark permits removal", mk_send_cpu_remove(2, test_cpu), 0);
-	expect("removed CPU returned to pool", mk_cpu_set_contains(pool.cpus, test_cpu), 1);
+	expect("removed CPU returned to pool",
+	       mk_cpu_set_contains(pool.cpus, test_cpu), 1);
 	expect("removed CPU no longer target-owned", target.cpus->nr, 0);
 	expect("confirmed host return clears tracking", target.cpus_on_slot->nr, 0);
 
 	reset();
 	assert(!mk_instance_transfer_cpus(&target, pool.cpus));
 	wake_fail_at = 1;
-	expect("first boot wake timeout", mk_spawn_cpu(&target, test_cpu, &spawn_ctx), -ETIMEDOUT);
+	expect("first boot wake timeout",
+	       mk_spawn_cpu(&target, test_cpu, &spawn_ctx), -ETIMEDOUT);
 	retained();
 	expect("boot tracking precedes publication", tracked_at_wake, 1);
 
@@ -328,34 +343,44 @@ int main(void)
 	assert(!mk_instance_transfer_cpus(&target, pool.cpus));
 	assert(!mk_cpu_set_add(target.cpus, 7));
 	wake_fail_at = 1;
-	expect("secondary handoff timeout", mk_spawn_cpu(&target, 7, &spawn_ctx), -ETIMEDOUT);
+	expect("secondary handoff timeout",
+	       mk_spawn_cpu(&target, 7, &spawn_ctx), -ETIMEDOUT);
 	retained();
 	expect("secondary tracking precedes publication", tracked_at_wake, 1);
 	expect("boot is not woken after secondary failure", wakes, 1);
-	expect("unpublished boot CPU is not tracked", mk_cpu_set_contains(target.cpus_on_slot, 7), 0);
+	expect("unpublished boot CPU is not tracked",
+	       mk_cpu_set_contains(target.cpus_on_slot, 7), 0);
 
 	reset();
 	assert(!mk_instance_transfer_cpus(&target, pool.cpus));
 	assert(!mk_cpu_set_add(target.cpus, test_cpu + 1));
 	assert(!mk_cpu_set_add(target.cpus, 7));
 	wake_fail_at = 2;
-	expect("partial secondary handoff failure", mk_spawn_cpu(&target, 7, &spawn_ctx), -ETIMEDOUT);
+	expect("partial secondary handoff failure",
+	       mk_spawn_cpu(&target, 7, &spawn_ctx), -ETIMEDOUT);
 	retained();
-	expect("second uncertain CPU remains tracked", mk_cpu_set_contains(target.cpus_on_slot, test_cpu + 1), 1);
+	expect("second uncertain CPU remains tracked",
+	       mk_cpu_set_contains(target.cpus_on_slot, test_cpu + 1), 1);
 	expect("partial handoff does not wake boot CPU", wakes, 2);
-	expect("unpublished boot stays untracked", mk_cpu_set_contains(target.cpus_on_slot, 7), 0);
+	expect("unpublished boot stays untracked",
+	       mk_cpu_set_contains(target.cpus_on_slot, 7), 0);
 
 	reset();
 	wake_fail_at = 1;
-	expect("uncertain add before confirmation", mk_send_cpu_add(2, test_cpu, 0, 0), -ETIMEDOUT);
+	expect("uncertain add before confirmation",
+	       mk_send_cpu_add(2, test_cpu, 0, 0), -ETIMEDOUT);
 	assert(!mk_cpu_set_add(target.cpus, 7));
 	assert(!mk_cpu_set_add(target.cpus_on_slot, 7));
 	confirm_mode = true;
-	expect("host fallback deletion must not skip running CPU", mk_instance_confirm_parked(&target), -EBUSY);
+	expect("host fallback deletion must not skip running CPU",
+	       mk_instance_confirm_parked(&target), -EBUSY);
 	expect("running CPU probed on both slots", running_probes, 2);
-	expect("fallback clears only confirmed host CPU", mk_cpu_set_contains(target.cpus_on_slot, test_cpu), 0);
-	expect("running CPU remains tracked", mk_cpu_set_contains(target.cpus_on_slot, 7), 1);
-	expect("host confirmation does not return ownership", mk_cpu_set_contains(target.cpus, test_cpu), 1);
+	expect("fallback clears only confirmed host CPU",
+	       mk_cpu_set_contains(target.cpus_on_slot, test_cpu), 0);
+	expect("running CPU remains tracked",
+	       mk_cpu_set_contains(target.cpus_on_slot, 7), 1);
+	expect("host confirmation does not return ownership",
+	       mk_cpu_set_contains(target.cpus, test_cpu), 1);
 
 	reset();
 	assert(!mk_instance_transfer_cpus(&target, pool.cpus));
@@ -363,27 +388,34 @@ int main(void)
 	assert(!mk_cpu_set_add(target.cpus_on_slot, test_cpu));
 	assert(!mk_cpu_set_add(target.cpus_on_slot, test_cpu + 1));
 	confirm_mode = true;
-	expect("all host-slot fallbacks can remove tracking", mk_instance_confirm_parked(&target), 0);
+	expect("all host-slot fallbacks can remove tracking",
+	       mk_instance_confirm_parked(&target), 0);
 	expect("all confirmed host CPUs were visited", target.cpus_on_slot->nr, 0);
 	expect("host confirmation retains both owners", target.cpus->nr, 2);
-	expect("empty tracking confirms without a probe", mk_instance_confirm_parked(&target), 0);
+	expect("empty tracking confirms without a probe",
+	       mk_instance_confirm_parked(&target), 0);
 
 	reset();
 	assert(!mk_instance_transfer_cpus(&target, pool.cpus));
-	expect("successful first boot", mk_spawn_cpu(&target, test_cpu, &spawn_ctx), 0);
-	expect("successful re-spawn uses existing tracking", mk_spawn_cpu(&target, test_cpu, &spawn_ctx), 0);
+	expect("successful first boot",
+	       mk_spawn_cpu(&target, test_cpu, &spawn_ctx), 0);
+	expect("successful re-spawn uses existing tracking",
+	       mk_spawn_cpu(&target, test_cpu, &spawn_ctx), 0);
 	expect("re-spawn tracking has no duplicates", target.cpus_on_slot->nr, 1);
 
 	reset();
 	mk_pool = NULL;
-	expect("active add without a pool is rejected", mk_send_cpu_add(2, test_cpu, 0, 0), -EBUSY);
+	expect("active add without a pool is rejected",
+	       mk_send_cpu_add(2, test_cpu, 0, 0), -EBUSY);
 	expect("missing pool publishes nothing", wakes, 0);
 	mk_pool = &pool;
 
 	reset();
 	assert(!mk_cpu_set_add(pool.cpus, test_cpu + 1));
-	expect("unmapped physical CPU is rejected", mk_send_cpu_add(2, test_cpu + 1, 0, 0), -EBUSY);
-	expect("mapping failure leaves CPU assignable", mk_cpu_set_contains(pool.cpus, test_cpu + 1), 1);
+	expect("unmapped physical CPU is rejected",
+	       mk_send_cpu_add(2, test_cpu + 1, 0, 0), -EBUSY);
+	expect("mapping failure leaves CPU assignable",
+	       mk_cpu_set_contains(pool.cpus, test_cpu + 1), 1);
 	expect("mapping failure publishes nothing", wakes, 0);
 	expect("mapping failure cleans pending", live_pending, 0);
 
@@ -392,8 +424,10 @@ int main(void)
 	test_cpu = 0x100010001ULL;
 	assert(!mk_cpu_set_add(pool.cpus, test_cpu));
 	target.state = MK_STATE_LOADED;
-	expect("nonrunning transfer preserves sparse 64-bit ID", mk_send_cpu_add(2, test_cpu, 0, 0), 0);
-	expect("full-width ID remains assigned", mk_cpu_set_contains(target.cpus, 0x100010001ULL), 1);
+	expect("nonrunning transfer preserves sparse 64-bit ID",
+	       mk_send_cpu_add(2, test_cpu, 0, 0), 0);
+	expect("full-width ID remains assigned",
+	       mk_cpu_set_contains(target.cpus, 0x100010001ULL), 1);
 	expect("nonrunning transfer does not wake CPU", wakes, 0);
 	reset();
 	mk_cpu_set_free(target.cpus);
