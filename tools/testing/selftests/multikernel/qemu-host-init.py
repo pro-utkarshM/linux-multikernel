@@ -15,6 +15,7 @@ import sys
 import time
 import traceback
 import tempfile
+from contextlib import contextmanager
 
 BASE = Path('/sys/fs/multikernel')
 
@@ -116,6 +117,19 @@ def mutate_image(data, case):
     return changed
 
 
+@contextmanager
+def load_fixture(data, size=None):
+    # kernel_read_file() denies writable-open files, even if flushed.
+    with tempfile.TemporaryDirectory() as directory:
+        path = Path(directory) / 'load-fixture'
+        with path.open('wb') as output:
+            output.write(data)
+            if size is not None:
+                output.truncate(size)
+        with path.open('rb') as source:
+            yield source
+
+
 def main():
     mount('proc', '/proc', 'proc')
     args = Path('/proc/cmdline').read_text().split()
@@ -186,17 +200,18 @@ def main():
             for case, expected in (('bad-magic', errno.EINVAL), ('bad-text-offset', errno.EINVAL),
                                    ('image-too-large', errno.ENOMEM), ('initrd-too-large', errno.ENOMEM)):
                 trace.write_text('\n')
-                with tempfile.TemporaryFile() as bad_kernel, tempfile.TemporaryFile() as bad_initrd:
-                    if case == 'initrd-too-large':
-                        bad_kernel.write(payload.read_bytes())
-                        # Exceeds the 256MiB grant after Image allocation;
-                        # tests partial-loader allocation rollback, not only probe rejection.
-                        bad_initrd.truncate(256 * 1024 * 1024)
-                    else:
-                        bad_kernel.write(mutate_image(payload.read_bytes(), case))
-                        bad_initrd.write(Path('/payload/secondary-initrd.cpio.gz').read_bytes())
-                    bad_kernel.flush()
-                    bad_initrd.flush()
+                kernel_data = payload.read_bytes()
+                initrd_data = Path('/payload/secondary-initrd.cpio.gz').read_bytes()
+                initrd_size = None
+                if case == 'initrd-too-large':
+                    # Exceeds the 256MiB grant after Image allocation;
+                    # tests partial-loader allocation rollback, not only probe rejection.
+                    initrd_data = b''
+                    initrd_size = 256 * 1024 * 1024
+                else:
+                    kernel_data = mutate_image(kernel_data, case)
+                with load_fixture(kernel_data) as bad_kernel, \
+                        load_fixture(initrd_data, size=initrd_size) as bad_initrd:
                     result = require_errno(lambda: kexec_file_load(
                         bad_kernel.fileno(), bad_initrd.fileno(),
                         'rdinit=/init console=mktty0 panic=1 mk_lifecycle_child=1',

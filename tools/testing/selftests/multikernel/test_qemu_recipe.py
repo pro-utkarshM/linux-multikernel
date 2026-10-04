@@ -5,6 +5,7 @@ import errno
 from pathlib import Path
 import unittest
 import tempfile
+import fcntl
 from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location('recipe', Path(__file__).with_name('qemu-host-init.py'))
@@ -13,6 +14,14 @@ spec.loader.exec_module(recipe)
 
 
 class Recipe(unittest.TestCase):
+    def test_load_fixture_has_no_writable_descriptor_during_loading(self):
+        with recipe.load_fixture(b'image') as stream:
+            self.assertEqual(fcntl.fcntl(stream.fileno(), fcntl.F_GETFL) & recipe.os.O_ACCMODE,
+                             recipe.os.O_RDONLY)
+            self.assertEqual(stream.read(), b'image')
+        with recipe.load_fixture(b'', size=4096) as stream:
+            self.assertEqual(recipe.os.fstat(stream.fileno()).st_size, 4096)
+
     def test_loader_mutations_change_only_the_intended_header_fields(self):
         image = bytes(range(128))
         for case, offset, size, expected in (
