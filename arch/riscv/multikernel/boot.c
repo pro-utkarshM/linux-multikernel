@@ -92,10 +92,16 @@ static int mk_boot_cpu(void *fdt, unsigned int cpu)
 		ret = mk_boot_cpu_property(fdt, np, "riscv,isa", false);
 	if (!ret)
 		ret = mk_boot_cpu_property(fdt, np, "riscv,isa-base",
-					    !of_get_property(np, "riscv,isa", NULL));
+					   !of_get_property(np, "riscv,isa", NULL));
 	if (!ret)
 		ret = mk_boot_cpu_property(fdt, np, "riscv,isa-extensions",
-					    !of_get_property(np, "riscv,isa", NULL));
+					   !of_get_property(np, "riscv,isa", NULL));
+	if (!ret)
+		ret = mk_boot_cpu_property(fdt, np, "riscv,cbom-block-size", false);
+	if (!ret)
+		ret = mk_boot_cpu_property(fdt, np, "riscv,cboz-block-size", false);
+	if (!ret)
+		ret = mk_boot_cpu_property(fdt, np, "riscv,cbop-block-size", false);
 	of_node_put(np);
 	if (!ret)
 		ret = fdt_begin_node(fdt, "interrupt-controller");

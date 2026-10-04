@@ -108,6 +108,9 @@ static void make_host(void)
 		assert(!fdt_property_string(host_fdt, "compatible", "riscv"));
 		assert(!fdt_property_string(host_fdt, "riscv,isa", "rv64imafdc_zicsr_zifencei"));
 		assert(!fdt_property_string(host_fdt, "mmu-type", "riscv,sv39"));
+		assert(!fdt_property_u32(host_fdt, "riscv,cbom-block-size", 64));
+		assert(!fdt_property_u32(host_fdt, "riscv,cboz-block-size", 64));
+		assert(!fdt_property_u32(host_fdt, "riscv,cbop-block-size", 64));
 		assert(!fdt_end_node(host_fdt));
 	}
 	assert(!fdt_end_node(host_fdt) && !fdt_end_node(host_fdt) && !fdt_finish(host_fdt));
@@ -144,6 +147,10 @@ int main(void)
 	assert(fdt_path_offset(fdt, "/memory@a0000000") >= 0);
 	assert(fdt_path_offset(fdt, "/cpus/cpu@10001/interrupt-controller") >= 0);
 	assert(fdt_path_offset(fdt, "/cpus/cpu@7/interrupt-controller") >= 0);
+	n = fdt_path_offset(fdt, "/cpus/cpu@7");
+	assert(fdt_getprop(fdt, n, "riscv,cbom-block-size", &len) && len == 4);
+	assert(fdt_getprop(fdt, n, "riscv,cboz-block-size", &len) && len == 4);
+	assert(fdt_getprop(fdt, n, "riscv,cbop-block-size", &len) && len == 4);
 	assert(fdt_path_offset(fdt, "/reserved-memory/control@92000000") >= 0);
 	instance.memory_regions.first = NULL;
 	assert(!fdt_create(fdt, sizeof(fdt)) && !fdt_finish_reservemap(fdt));
