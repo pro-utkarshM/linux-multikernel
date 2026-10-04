@@ -13,11 +13,24 @@ spec.loader.exec_module(recipe)
 
 class Recipe(unittest.TestCase):
     def test_probe_setup_reports_the_exact_rejected_command(self):
-        with patch.object(recipe.Path, 'open') as opened:
-            stream = opened.return_value.__enter__.return_value
-            stream.write.side_effect = OSError(errno.EINVAL, 'Invalid argument')
+        with patch.object(recipe.os, 'open', return_value=7) as opened, \
+                patch.object(recipe.os, 'write', side_effect=OSError(errno.EINVAL, 'Invalid argument')), \
+                patch.object(recipe.os, 'close') as closed:
             with self.assertRaisesRegex(RuntimeError, 'p:mk_copy kimage_load_segment'):
                 recipe.register_probe(Path('/trace'), 'p:mk_copy kimage_load_segment')
+            opened.assert_called_once_with(Path('/trace/kprobe_events'), recipe.os.O_WRONLY | recipe.os.O_APPEND)
+            closed.assert_called_once_with(7)
+
+    def test_probe_setup_does_not_seek_on_tracefs(self):
+        command = 'p:mk_start sbi_hsm_hart_start'
+        with patch.object(recipe.os, 'open', return_value=7) as opened, \
+                patch.object(recipe.os, 'write', return_value=len(command) + 1) as written, \
+                patch.object(recipe.os, 'close') as closed, \
+                patch.object(recipe.Path, 'open', side_effect=AssertionError('buffered append seeks')):
+            recipe.register_probe(Path('/trace'), command)
+            opened.assert_called_once_with(Path('/trace/kprobe_events'), recipe.os.O_WRONLY | recipe.os.O_APPEND)
+            written.assert_called_once_with(7, (command + '\n').encode())
+            closed.assert_called_once_with(7)
 
     def test_expected_kernel_errno_not_any_failure(self):
         def rejected():

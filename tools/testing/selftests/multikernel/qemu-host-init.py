@@ -73,11 +73,18 @@ def require_errno(operation, expected):
 
 
 def register_probe(trace_dir, command):
+    fd = None
     try:
-        with (trace_dir / 'kprobe_events').open('a') as events:
-            events.write(command + '\n')
+        # Buffered append seeks to EOF; tracefs seq files reject SEEK_END.
+        # Do not truncate: already enabled probes must remain registered.
+        fd = os.open(trace_dir / 'kprobe_events', os.O_WRONLY | os.O_APPEND)
+        data = (command + '\n').encode()
+        assert os.write(fd, data) == len(data), 'short probe registration'
     except OSError as error:
         raise RuntimeError('probe registration failed: ' + command) from error
+    finally:
+        if fd is not None:
+            os.close(fd)
 
 
 def main():
