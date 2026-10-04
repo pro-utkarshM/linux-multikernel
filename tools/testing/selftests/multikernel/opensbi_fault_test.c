@@ -35,8 +35,20 @@ int main(void)
 		rc = mk_test_hsm_start(7, MK_TEST_PRIME, 0);
 		assert(rc == (MK_TEST_FAULT == 3 ? SBI_EDENIED : 0));
 	}
+	assert(mk_test_hsm_status(65537, 1) == 1);
 	rc = mk_test_hsm_start(65537, 0x88000000, 0x89000000);
-	assert(rc == (MK_TEST_FAULT == 4 ? SBI_EDENIED : 0));
+	assert(rc == ((MK_TEST_FAULT == 4 || MK_TEST_FAULT == 8) ? SBI_EDENIED : 0));
+	if (MK_TEST_FAULT == 8) {
+		assert(mk_test_hsm_status(65537, 1) == 3);
+		assert(mk_test_hsm_status(65537, 0) == 0);
+		assert(mk_test_hsm_status(65537, -4) == -4);
+		assert(mk_test_hsm_status(7, 1) == 1);
+		assert(mk_test_hsm_status(999, 1) == 1);
+		for (int i = 0; i < 100; i++)
+			assert(mk_test_hsm_status(65537, 1) == 3);
+		puts("PASS: firmware selector mode 8");
+		return 0;
+	}
 	if (!rc)
 		mk_test_hsm_started(65537, 0x88000000, 0x89000000);
 	rc = mk_test_hsm_start(7, 0x88000000, 0x89000000);

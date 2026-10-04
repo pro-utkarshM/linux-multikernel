@@ -10,6 +10,7 @@
 static spinlock_t mk_test_lock = SPIN_LOCK_INITIALIZER;
 static bool mk_test_primed[SBI_HARTMASK_MAX_BITS];
 static bool mk_test_running[SBI_HARTMASK_MAX_BITS];
+static bool mk_test_failed_pending[SBI_HARTMASK_MAX_BITS];
 static u32 mk_test_polls[SBI_HARTMASK_MAX_BITS];
 static u32 mk_test_prime_calls, mk_test_image_calls;
 static bool mk_test_rejected;
@@ -40,7 +41,8 @@ static int mk_test_hsm_start(u32 hart, ulong entry, ulong opaque)
 			mk_test_primary = hart;
 		}
 		/* Keep child retries denied, but permit the host's different entry. */
-		if ((MK_TEST_FAULT == 4 && !mk_test_rejected && mk_test_image_calls == 1) ||
+		if (((MK_TEST_FAULT == 4 || MK_TEST_FAULT == 8) &&
+		     !mk_test_rejected && mk_test_image_calls == 1) ||
 		    (MK_TEST_FAULT == 5 && hart != mk_test_primary && entry == mk_test_stub))
 			ret = SBI_EDENIED;
 	}
@@ -48,6 +50,9 @@ static int mk_test_hsm_start(u32 hart, ulong entry, ulong opaque)
 		mk_test_rejected = true;
 	if (ret && MK_TEST_FAULT == 5)
 		mk_test_deferred[index] = true;
+	/* Arm only after primary rejection, never during successful priming. */
+	if (ret && MK_TEST_FAULT == 8)
+		mk_test_failed_pending[index] = true;
 	spin_unlock(&mk_test_lock);
 	if (ret && MK_TEST_FAULT != 5)
 		sbi_printf("MK_FW_REJECT mode=%u hart=%u entry=0x%lx error=%d\n",
@@ -88,12 +93,13 @@ static int mk_test_hsm_status(u32 hart, int state)
 				   hart, mk_test_stub);
 		return state;
 	}
-	if ((MK_TEST_FAULT != 6 && MK_TEST_FAULT != 7) ||
+	if ((MK_TEST_FAULT != 6 && MK_TEST_FAULT != 7 && MK_TEST_FAULT != 8) ||
 	    index >= SBI_HARTMASK_MAX_BITS || state != SBI_HSM_STATE_STOPPED)
 		return state;
 	spin_lock(&mk_test_lock);
-	if (mk_test_running[index] &&
-	    (MK_TEST_FAULT == 7 || mk_test_polls[index] < 32)) {
+	if ((MK_TEST_FAULT == 8 && mk_test_failed_pending[index]) ||
+	    (mk_test_running[index] &&
+	     (MK_TEST_FAULT == 7 || mk_test_polls[index] < 32))) {
 		report = !mk_test_polls[index];
 		if (mk_test_polls[index] < 32)
 			mk_test_polls[index]++;

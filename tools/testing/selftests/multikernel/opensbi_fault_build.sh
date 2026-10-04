@@ -7,7 +7,7 @@ source_dir=${1:?OPEN_SBI_SOURCE KERNEL_BUILD MODE OUTPUT_PARENT}
 kernel_build=${2:?missing kernel build}
 mode=${3:?missing mode}
 parent=${4:?missing output parent}
-[[ "$mode" =~ ^[0-7]$ ]] || exit 2
+[[ "$mode" =~ ^[0-8]$ ]] || exit 2
 test "$(git -C "$source_dir" rev-parse HEAD)" = 74434f255873d74e56cc50aa762d1caf24c099f8
 cmp "$source_dir/lib/sbi/opensbi_test_hsm.h" "$test_dir/opensbi_test_hsm.h"
 cmp <(git -C "$source_dir" -c diff.noprefix=false -c diff.mnemonicprefix=false diff --unified=0 -- lib/sbi/sbi_ecall_hsm.c) \
