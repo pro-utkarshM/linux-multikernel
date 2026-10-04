@@ -71,10 +71,27 @@ static void *image_load(struct kimage *image,
 	kbuf.mem = KEXEC_BUF_MEM_UNKNOWN;
 	kbuf.memsz = le64_to_cpu(h->image_size);
 	kbuf.buf_align = le64_to_cpu(h->text_offset);
+	if (image->type == KEXEC_TYPE_MULTIKERNEL) {
+		/* rv64 requires a 2 MiB-aligned Image and complete PMD extent. */
+		if (kernel_len > kbuf.memsz || kbuf.buf_align != SZ_2M) {
+			ret = -EINVAL;
+			goto out;
+		}
+		if (kbuf.memsz > ULONG_MAX - (SZ_2M - 1)) {
+			ret = -EOVERFLOW;
+			goto out;
+		}
+		kbuf.memsz = ALIGN(kbuf.memsz, SZ_2M);
+	}
 
 	ret = kexec_add_buffer(&kbuf);
 	if (ret) {
 		pr_err("Error add kernel image ret=%d\n", ret);
+		goto out;
+	}
+	if (image->type == KEXEC_TYPE_MULTIKERNEL &&
+	    !IS_ALIGNED(kbuf.mem, SZ_2M)) {
+		ret = -EINVAL;
 		goto out;
 	}
 
