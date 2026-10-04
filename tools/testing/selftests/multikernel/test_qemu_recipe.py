@@ -12,6 +12,13 @@ spec.loader.exec_module(recipe)
 
 
 class Recipe(unittest.TestCase):
+    def test_probe_setup_reports_the_exact_rejected_command(self):
+        with patch.object(recipe.Path, 'open') as opened:
+            stream = opened.return_value.__enter__.return_value
+            stream.write.side_effect = OSError(errno.EINVAL, 'Invalid argument')
+            with self.assertRaisesRegex(RuntimeError, 'p:mk_copy kimage_load_segment'):
+                recipe.register_probe(Path('/trace'), 'p:mk_copy kimage_load_segment')
+
     def test_expected_kernel_errno_not_any_failure(self):
         def rejected():
             raise OSError(errno.EBUSY, 'busy')

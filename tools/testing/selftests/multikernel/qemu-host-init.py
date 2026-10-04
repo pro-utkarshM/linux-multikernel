@@ -13,6 +13,7 @@ import select
 import subprocess
 import sys
 import time
+import traceback
 
 BASE = Path('/sys/fs/multikernel')
 
@@ -71,6 +72,14 @@ def require_errno(operation, expected):
     raise AssertionError('operation unexpectedly succeeded')
 
 
+def register_probe(trace_dir, command):
+    try:
+        with (trace_dir / 'kprobe_events').open('a') as events:
+            events.write(command + '\n')
+    except OSError as error:
+        raise RuntimeError('probe registration failed: ' + command) from error
+
+
 def main():
     mount('proc', '/proc', 'proc')
     args = Path('/proc/cmdline').read_text().split()
@@ -100,8 +109,8 @@ def main():
         'r:mk_hsm_status sbi_hsm_hart_get_status hart=$arg1:u64 state=$retval:s32\n')
     (trace_dir / 'events/kprobes/mk_hsm_status/enable').write_text('1\n')
     if mode == 'stuck-stop':
-        with (trace_dir / 'kprobe_events').open('a') as events:
-            events.write('p:mk_copy kimage_load_segment\np:mk_start sbi_hsm_hart_start\n')
+        for command in ('p:mk_copy kimage_load_segment', 'p:mk_start sbi_hsm_hart_start'):
+            register_probe(trace_dir, command)
         for event in ('mk_copy', 'mk_start'):
             (trace_dir / ('events/kprobes/' + event + '/enable')).write_text('1\n')
     trace = trace_dir / 'trace'
@@ -264,6 +273,7 @@ if __name__ == '__main__':
         main()
     except Exception as error:
         marker('FAIL', error=repr(error))
+        traceback.print_exc()
         trace = Path('/sys/kernel/tracing/trace')
         if trace.exists():
             print(trace.read_text(), flush=True)
