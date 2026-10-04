@@ -114,4 +114,13 @@ static inline bool cpu_has_hotplug(unsigned int cpu)
 }
 #endif
 
+#ifdef CONFIG_MULTIKERNEL
+bool mk_riscv_cpu_assigned(unsigned int cpu);
+#else
+static inline bool mk_riscv_cpu_assigned(unsigned int cpu)
+{
+	return true;
+}
+#endif
+
 #endif /* _ASM_RISCV_SMP_H */
