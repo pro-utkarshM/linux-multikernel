@@ -251,7 +251,30 @@ int arch_kexec_apply_relocations_add(struct purgatory_info *pi,
 	}
 	return 0;
 }
+static int load_multikernel_segments(struct kimage *image, char *initrd,
+				   unsigned long initrd_len)
+{
+	struct kexec_buf kbuf = {
+		.image = image,
+		.buf_max = ULONG_MAX,
+		.buffer = initrd,
+		.bufsz = initrd_len,
+		.memsz = initrd_len,
+		.mem = KEXEC_BUF_MEM_UNKNOWN,
+		.buf_align = PAGE_SIZE,
+	};
+	int ret;
 
+	/* The execution-time manifest is the boot tree; never clone host FDT. */
+	if (!initrd)
+		return 0;
+	ret = kexec_add_buffer(&kbuf);
+	if (ret)
+		return ret;
+	image->arch.initrd_start = kbuf.mem;
+	image->arch.initrd_size = initrd_len;
+	return 0;
+}
 
 int load_extra_segments(struct kimage *image, unsigned long kernel_start,
 			    unsigned long kernel_len, char *initrd,
@@ -263,6 +286,9 @@ int load_extra_segments(struct kimage *image, unsigned long kernel_start,
 	unsigned long initrd_pbase = 0UL;
 	struct kexec_buf kbuf = {};
 	char *modified_cmdline = NULL;
+
+	if (image->type == KEXEC_TYPE_MULTIKERNEL)
+		return load_multikernel_segments(image, initrd, initrd_len);
 
 	kbuf.image = image;
 	kbuf.buf_min = kernel_start + kernel_len;
