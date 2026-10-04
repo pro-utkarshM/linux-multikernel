@@ -25,7 +25,8 @@ awk '/^int mk_instance_confirm_parked\(/ { copy = 1 }
      > "$build/cpu-confirm.h"
 awk '/^static struct mk_cpu_set \*mk_slot_set\(/ { copy = 1 }
      /^static int mk_(publish_repark|repark_to_instance)\(/ { copy = 1 }
-     /^int mk_(spawn_cpu|repark_cpu_to_instance|repark_cpu_to_host|arch_confirm_parked)\(/ { copy = 1 }
+     /^int mk_(spawn_cpu|arch_confirm_parked)\(/ { copy = 1 }
+     /^int mk_repark_cpu_to_(instance|host)\(/ { copy = 1 }
      copy { print }
      copy && /^}/ { copy = 0 }' "$src/arch/x86/multikernel/spawn.c" \
      > "$build/cpu-x86.h"
