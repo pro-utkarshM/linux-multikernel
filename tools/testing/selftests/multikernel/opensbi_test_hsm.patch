@@ -1,0 +1,37 @@
+diff --git a/lib/sbi/sbi_ecall_hsm.c b/lib/sbi/sbi_ecall_hsm.c
+index a6e83b0..20ffe08 100644
+--- a/lib/sbi/sbi_ecall_hsm.c
++++ b/lib/sbi/sbi_ecall_hsm.c
+@@ -15,6 +15,10 @@
+ #include <sbi/sbi_hsm.h>
+ #include <sbi/sbi_scratch.h>
+ #include <sbi/riscv_asm.h>
++#include <sbi/riscv_locks.h>
++#include <sbi/sbi_hartmask.h>
++#include <sbi/sbi_console.h>
++#include "opensbi_test_hsm.h"
+ 
+ static int sbi_ecall_hsm_handler(unsigned long extid, unsigned long funcid,
+ 				 struct sbi_trap_regs *regs,
+@@ -27,8 +31,13 @@ static int sbi_ecall_hsm_handler(unsigned long extid, unsigned long funcid,
+ 
+ 	switch (funcid) {
+ 	case SBI_EXT_HSM_HART_START:
++		ret = mk_test_hsm_start(regs->a0, regs->a1, regs->a2);
++		if (ret)
++			break;
+ 		ret = sbi_hsm_hart_start(scratch, sbi_domain_thishart_ptr(),
+ 					 regs->a0, regs->a1, smode, regs->a2);
++		if (!ret)
++			mk_test_hsm_started(regs->a0, regs->a1, regs->a2);
+ 		break;
+ 	case SBI_EXT_HSM_HART_STOP:
+ 		ret = sbi_hsm_hart_stop(scratch, true);
+@@ -36,6 +45,7 @@ static int sbi_ecall_hsm_handler(unsigned long extid, unsigned long funcid,
+ 	case SBI_EXT_HSM_HART_GET_STATUS:
+ 		ret = sbi_hsm_hart_get_state(sbi_domain_thishart_ptr(),
+ 					     regs->a0);
++		ret = mk_test_hsm_status(regs->a0, ret);
+ 		break;
+ 	case SBI_EXT_HSM_HART_SUSPEND:
+ 		ret = sbi_hsm_hart_suspend(scratch, regs->a0, regs->a1,

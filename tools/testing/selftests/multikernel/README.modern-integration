@@ -41,3 +41,30 @@ serial output; it is emitted after the final marker and checked for warnings.
 A process exit zero alone is never a pass. These recipes do not
 yet cover firmware fault injection, live CPU add,
 native callback/RCU concurrency or physical cache behavior.
+
+Test-only firmware selectors (not real SBI domain policy)
+--------------------------------------------------------
+
+Use a fresh OpenSBI worktree at 74434f255873d74e56cc50aa762d1caf24c099f8,
+apply opensbi_test_hsm.patch and copy opensbi_test_hsm.h to lib/sbi/. Only those
+two paths may differ. Never reuse the historical dirty firmware checkout.
+Run opensbi_fault_build.sh SOURCE KERNEL_BUILD MODE OUTPUT_PARENT to create
+a fresh firmware bundle. Its priming selector is derived from the frozen ELF
+and Image header for QEMU virt, not a historical literal address. It records
+source, selector, patch, host hashes, command, build log and firmware hashes.
+
+Modes: 0 off; 1 denied priming; 2 invalid priming; 3 second priming denied;
+4 denied actual primary start; 5 denied secondary start after primary start;
+6 synthetic STOP_PENDING for 32 polls after actual STOPPED, then resolves;
+7 synthetic permanent STOP_PENDING after actual STOPPED. All selectors are
+test-only. Modes 6/7 intentionally hide firmware's actual STOPPED state to
+exercise host confirmation/retention, not emulate a hart still executing.
+Unknown/sparse hart IDs are translated by firmware's mapping, never array
+indexed directly. opensbi_fault_test.sh checks selectors at modeled boundaries.
+
+Mode 6 uses the normal graceful/two-hart/one-cycle recipe and must additionally
+pass verify_pending.py SERIAL_LOG EXIT_STATUS. It requires an injection marker
+and a pending-to-stopped trace for each assigned hart; normal success without
+fault injection is not accepted. Native denial/partial/stuck-state guest
+recipes and lost-ACK testing are still pending. Do not count selector unit
+checks or a firmware build as a native fault test.
