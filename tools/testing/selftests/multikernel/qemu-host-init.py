@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 """Bounded extension of the pinned #35/Kerf guest, not a standalone harness."""
 import ctypes
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -68,10 +69,15 @@ def main():
     mode = options.get('mk_lifecycle_mode', 'graceful')
     harts = int(options.get('mk_lifecycle_harts', '1'))
     cycles = int(options.get('mk_lifecycle_cycles', '1'))
+    images = options.get('mk_lifecycle_images', 'same')
     assert mode in ('graceful', 'halt', 'poweroff', 'reboot', 'panic')
     assert harts in (1, 2) and 1 <= cycles <= 50
+    assert images in ('same', 'alternate') and (images == 'same' or cycles >= 2)
     mount('sysfs', '/sys', 'sysfs')
     mount('devtmpfs', '/dev', 'devtmpfs')
+    # Preserve all host printk records, but do not interleave them with JSON.
+    # The complete retained host dmesg is emitted for fail-closed verification.
+    subprocess.run(['/bin/busybox', 'dmesg', '-n', '1'], check=True)
     mount('none', str(BASE), 'multikernel')
     mount('tracefs', '/sys/kernel/tracing', 'tracefs')
     trace_dir = Path('/sys/kernel/tracing')
@@ -95,15 +101,26 @@ def main():
     ids = [logical_to_apic()[i] for i in range(1, harts + 1)]
     assert Path('/sys/devices/system/cpu/online').read_text().strip() == '0-3'
     host_boot = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
-    marker('BEGIN', mode=mode, harts=ids, cycles=cycles, host_boot=host_boot)
+    marker('BEGIN', mode=mode, harts=ids, cycles=cycles, host_boot=host_boot, images=images)
     cli('init', '--cpus=' + ','.join(map(str, ids)), '--memory=512MB', '--devices=none')
     cli('create', 'lifecycle-test', '--id=1', '--cpus=' + ','.join(map(str, ids)), '--memory=256MB')
     seen_boots = set()
+    image_start = None
     for cycle in range(1, cycles + 1):
-        with open('/payload/vmlinux', 'rb') as kernel, open('/payload/secondary-initrd.cpio.gz', 'rb') as initrd:
+        payload = Path('/payload/vmlinux-alt' if images == 'alternate' and cycle % 2 == 0
+                       else '/payload/vmlinux')
+        expected_release = Path(str(payload) + '.release').read_text().strip()
+        image_sha = hashlib.sha256(payload.read_bytes()).hexdigest()
+        with payload.open('rb') as kernel, open('/payload/secondary-initrd.cpio.gz', 'rb') as initrd:
             kexec_file_load(kernel.fileno(), initrd.fileno(),
-                            'rdinit=/init console=mktty0 earlycon=sbi panic=1 mk_lifecycle_child=1',
+                            'rdinit=/init console=mktty0 panic=1 mk_lifecycle_child=1',
                             KEXEC_MULTIKERNEL | KEXEC_MK_ID(1))
+        placements = re.findall(rb'kexec_file\(Image\): Loaded kernel at (0x[0-9a-f]+)',
+                                subprocess.check_output(['/bin/busybox', 'dmesg']))
+        assert placements, 'no loader placement evidence'
+        placement = int(placements[-1], 16)
+        assert image_start is None or image_start == placement
+        image_start = placement
         assert status() == 'loaded'
         fd = connect_console(1)
         received = bytearray()
@@ -126,11 +143,13 @@ def main():
             assert online == present and {mappings[cpu] for cpu in present} == set(ids)
             assert len(cpu_set(ready[3].decode())) == 4
             assert ready[4] not in seen_boots
+            assert ready[5].decode() == expected_release
             seen_boots.add(ready[4])
             os.write(fd, b'ping\n')
             read_until(rb'MK_CHILD_PONG\r?\n')
             marker('CHILD', cycle=cycle, boot=ready[4].decode(), assigned=ids,
-                   online=sorted(online), ring_roundtrip=True, release=ready[5].decode())
+                   online=sorted(online), ring_roundtrip=True, release=ready[5].decode(),
+                   image_sha=image_sha, image_start=placement)
             trace.write_text('\n')
             if mode == 'graceful':
                 halt_multikernel(1)
@@ -158,6 +177,7 @@ def main():
     assert Path('/sys/devices/system/cpu/online').read_text().strip() == '0-3'
     assert not list((BASE / 'instances').iterdir())
     marker('PASS', mode=mode, cycles=cycles, host_alive=True)
+    subprocess.run(['/bin/busybox', 'dmesg'], check=True)
 
 
 if __name__ == '__main__':

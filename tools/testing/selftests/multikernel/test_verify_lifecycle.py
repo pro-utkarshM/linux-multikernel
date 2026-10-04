@@ -10,17 +10,41 @@ def event(kind, **values):
 
 def complete_log():
     return ('OpenSBI v1.8.1\n' +
-            event('BEGIN', mode='graceful', harts=[65537], cycles=1, host_boot='host') +
+            event('BEGIN', mode='graceful', harts=[65537], cycles=1, host_boot='host', images='same') +
             'MK_CHILD_READY online=0 present=0 possible=0-3 boot=child release=linux-test\n' +
             'MK_CHILD_PONG\n' +
             event('CHILD', cycle=1, boot='child', assigned=[65537], online=[0],
-                  ring_roundtrip=True, release='linux-test') +
+                  ring_roundtrip=True, release='linux-test', image_sha='a' * 64,
+                  image_start=0x90000000) +
             event('STOPPED', cycle=1, harts=[65537], host_alive=True,
                   hsm_trace=['kerf-1 [000] 1.000: mk_hsm_status: hart=65537 state=1']) +
             event('PASS', mode='graceful', cycles=1, host_alive=True))
 
 
 class Verification(unittest.TestCase):
+    def test_alternating_images_require_distinct_execution_and_fixed_address(self):
+        rows = complete_log().splitlines(keepends=True)
+        begin = json.loads(rows[1].partition(' ')[2])
+        begin.update(cycles=2, images='alternate')
+        first = ''.join(rows[2:-1])
+        second = first.replace('child', 'child2').replace('"cycle": 1', '"cycle": 2')
+        second = second.replace('a' * 64, 'b' * 64).replace('linux-test', 'linux-alt')
+        text = (rows[0] + event('BEGIN', **begin) + first + second +
+                event('PASS', mode='graceful', cycles=2, host_alive=True))
+        self.assertEqual(verify(text, 0, 'graceful', 1, 2, 'alternate')['result'], 'PASS')
+        for before, after in (('b' * 64, 'a' * 64), ('linux-alt', 'linux-test'),
+                              ('"image_start": 2415919104', '"image_start": 2418016256')):
+            broken = text.replace(before, after) if before != '"image_start": 2415919104' else \
+                text[:text.index(second)] + second.replace(before, after) + text[text.index(second) + len(second):]
+            with self.assertRaises(ValueError):
+                verify(broken, 0, 'graceful', 1, 2, 'alternate')
+
+    def test_fixed_image_address_and_valid_hash_are_required(self):
+        for before, after in (('"image_start": 2415919104', '"image_start": 2415919105'),
+                              ('"image_sha": "' + 'a' * 64 + '"', '"image_sha": ""')):
+            with self.assertRaises(ValueError):
+                verify(complete_log().replace(before, after), 0, 'graceful', 1, 1)
+
     def test_raw_hsm_stop_evidence_is_required(self):
         text = complete_log()
         for before, after in (('hart=65537 state=1', 'hart=65537 state=3'),

@@ -15,11 +15,16 @@ host payload is named /payload/vmlinux but contains the raw RISC-V Image.
 Use the merged-/usr RISC-V runtime with Python, libfdt, Kerf and static BusyBox.
 
 Run bash qemu_lifecycle_test.sh KERNEL_BUILD HARNESS KERF_SOURCE RISCV_RUNTIME
-FIRMWARE OUTPUT_PARENT MODE HARTS CYCLES. OUTPUT_PARENT must end in /build;
+FIRMWARE OUTPUT_PARENT MODE HARTS CYCLES [ALTERNATE_BUILD]. OUTPUT_PARENT must end in /build;
 every invocation creates a fresh bundle and preserves failures. It verifies
 dependency pins, source cleanliness and exact Kerf runtime contents, reuses
 the unchanged pinned packing helper, freezes inputs and verifies raw logs.
-Build vmlinux/Image from the clean source immediately before packaging.
+Build vmlinux/Image from the clean source immediately before packaging. The
+optional alternate build must use the same clean source and config, but a
+different LOCALVERSION (for example LOCALVERSION=-mk-alt) and distinct Image.
+Alternate runs require at least two cycles. Each executing child's release
+must match its selected frozen build; hashes must alternate at a fixed physical
+Image address. Use CYCLES=50 for same and alternating replacement qualification.
 
 Build CONFIG_MULTIKERNEL, CONFIG_MKTTY and CONFIG_KPROBES as built-ins. Boot
 QEMU virt/PLIC with stock OpenSBI, four harts, 2GiB, no network/host disks,
@@ -31,6 +36,8 @@ The host must observe actual child PID1, exact assigned physical CPUs despite
 different logical numbering, a ping/pong through mktty, fresh child boot IDs,
 post-action HSM STOPPED evidence for every assigned hart and unchanged host
 boot ID. On failure, retain the entire archive/config/firmware/command/log and
-exit status. A process exit zero alone is never a pass. These recipes do not
-yet cover firmware fault injection, different-Image replacement, live CPU add,
+exit status. Host printk is retained in dmesg, not interleaved with structured
+serial output; it is emitted after the final marker and checked for warnings.
+A process exit zero alone is never a pass. These recipes do not
+yet cover firmware fault injection, live CPU add,
 native callback/RCU concurrency or physical cache behavior.
