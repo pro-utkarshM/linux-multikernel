@@ -15,6 +15,16 @@
 #include <linux/interrupt.h>
 #include <linux/mutex.h>
 #include <linux/multikernel.h>
+#ifdef MK_NATIVE_TEST_KERNEL
+#include <linux/init.h>
+#include "../../tools/testing/selftests/multikernel/native_ack_fault.h"
+static bool mk_test_drop_shutdown_ack;
+static int __init mk_test_drop_ack_setup(char *value)
+{
+	return kstrtobool(value, &mk_test_drop_shutdown_ack) ? 0 : 1;
+}
+__setup("mk_test_drop_shutdown_ack=", mk_test_drop_ack_setup);
+#endif
 
 /* Pending message tracking for request-response pattern */
 struct mk_pending_msg {
@@ -179,6 +189,9 @@ void mk_msg_pending_complete(u32 msg_type, u32 operation, u64 resource_id,
 {
 	struct mk_pending_msg *pending;
 	unsigned long flags;
+#ifdef MK_NATIVE_TEST_KERNEL
+	bool dropped = false;
+#endif
 
 	spin_lock_irqsave(&mk_pending_msgs_lock, flags);
 	list_for_each_entry(pending, &mk_pending_msgs, list) {
@@ -187,6 +200,14 @@ void mk_msg_pending_complete(u32 msg_type, u32 operation, u64 resource_id,
 		    pending->operation == operation &&
 		    pending->resource_id == resource_id) {
 			if (!pending->completed) {
+#ifdef MK_NATIVE_TEST_KERNEL
+				if (mk_self && mk_test_lose_shutdown_ack(
+					    &mk_test_drop_shutdown_ack, mk_self->id,
+					    msg_type, operation, resource_id, msg_id, result)) {
+					dropped = true;
+					break;
+				}
+#endif
 				pending->result = result;
 				pending->completed = true;
 				complete(&pending->done);
@@ -195,6 +216,11 @@ void mk_msg_pending_complete(u32 msg_type, u32 operation, u64 resource_id,
 		}
 	}
 	spin_unlock_irqrestore(&mk_pending_msgs_lock, flags);
+#ifdef MK_NATIVE_TEST_KERNEL
+	if (dropped)
+		pr_info("MK_TEST_ACK_DROPPED type=%u operation=%u resource=%llu request=%llu result=%d\n",
+			msg_type, operation, resource_id, msg_id, result);
+#endif
 }
 
 /**
