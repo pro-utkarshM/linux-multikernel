@@ -46,7 +46,10 @@ Test-only firmware selectors (not real SBI domain policy)
 --------------------------------------------------------
 
 Use a fresh OpenSBI worktree at 74434f255873d74e56cc50aa762d1caf24c099f8,
-apply opensbi_test_hsm.patch and copy opensbi_test_hsm.h to lib/sbi/. Only those
+apply opensbi_test_hsm.patch with git apply --unidiff-zero and copy
+opensbi_test_hsm.h to lib/sbi/. The context-free asset avoids treating unified
+diff context indentation as source whitespace; the exact source pin is checked.
+Only those
 two paths may differ. Never reuse the historical dirty firmware checkout.
 Run opensbi_fault_build.sh SOURCE KERNEL_BUILD MODE OUTPUT_PARENT to create
 a fresh firmware bundle. Its priming selector is derived from the frozen ELF

@@ -10,7 +10,7 @@ parent=${4:?missing output parent}
 [[ "$mode" =~ ^[0-7]$ ]] || exit 2
 test "$(git -C "$source_dir" rev-parse HEAD)" = 74434f255873d74e56cc50aa762d1caf24c099f8
 cmp "$source_dir/lib/sbi/opensbi_test_hsm.h" "$test_dir/opensbi_test_hsm.h"
-cmp <(git -C "$source_dir" -c diff.noprefix=false -c diff.mnemonicprefix=false diff -- lib/sbi/sbi_ecall_hsm.c) \
+cmp <(git -C "$source_dir" -c diff.noprefix=false -c diff.mnemonicprefix=false diff --unified=0 -- lib/sbi/sbi_ecall_hsm.c) \
     "$test_dir/opensbi_test_hsm.patch"
 test "$(git -C "$source_dir" status --porcelain)" = $' M lib/sbi/sbi_ecall_hsm.c\n?? lib/sbi/opensbi_test_hsm.h'
 start=$(llvm-nm "$kernel_build/vmlinux.unstripped" | awk '$3 == "_start" {print $1}')
