@@ -65,5 +65,9 @@ int main(void)
 	instance.id=2;
 	mk_instance_mem_free(&instance, (void *)12288, 4096);
 	assert(frees == 5 && markers == 3);
+	instance.id=1;
+	host.id=1;
+	mk_instance_mem_free(&instance, (void *)12288, 4096);
+	assert(frees == 6 && markers == 3);
 	puts("PASS: actual allocation/ring/manifest release marker sites/default-off/target");
 }

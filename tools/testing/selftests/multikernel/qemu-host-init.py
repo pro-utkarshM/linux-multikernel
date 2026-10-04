@@ -141,7 +141,8 @@ def main():
     images = options.get('mk_lifecycle_images', 'same')
     fault = int(options.get('mk_lifecycle_fault', '0'))
     assert mode in ('graceful', 'halt', 'poweroff', 'reboot', 'panic',
-                    'deny-primary', 'partial-start', 'stuck-stop', 'loader-negative')
+                    'deny-primary', 'partial-start', 'stuck-stop', 'loader-negative',
+                    'failed-retain', 'lost-ack')
     assert harts in (1, 2) and 1 <= cycles <= 50
     assert images in ('same', 'alternate') and (images == 'same' or cycles >= 2)
     if mode in ('deny-primary', 'partial-start', 'stuck-stop'):
@@ -149,6 +150,9 @@ def main():
         assert fault in {'deny-primary': (1, 2, 3, 4), 'partial-start': (5,), 'stuck-stop': (7,)}[mode]
     if mode == 'loader-negative':
         assert cycles == 1 and images == 'same' and fault == 0
+    if mode in ('failed-retain', 'lost-ack'):
+        assert harts == 2 and cycles == 1 and images == 'same'
+        assert fault in ((8,) if mode == 'failed-retain' else (0, 7))
     mount('sysfs', '/sys', 'sysfs')
     mount('devtmpfs', '/dev', 'devtmpfs')
     # Preserve all host printk records, but do not interleave them with JSON.
@@ -160,7 +164,7 @@ def main():
     (trace_dir / 'kprobe_events').write_text(
         'r:mk_hsm_status sbi_hsm_hart_get_status hart=$arg1:u64 state=$retval:s32\n')
     (trace_dir / 'events/kprobes/mk_hsm_status/enable').write_text('1\n')
-    if mode in ('stuck-stop', 'loader-negative'):
+    if mode in ('stuck-stop', 'loader-negative', 'failed-retain', 'lost-ack'):
         for command in ('p:mk_copy kimage_load_segment', 'p:mk_start sbi_hsm_hart_start'):
             register_probe(trace_dir, command)
         for event in ('mk_copy', 'mk_start'):
@@ -186,6 +190,80 @@ def main():
     marker('BEGIN', mode=mode, harts=ids, cycles=cycles, host_boot=host_boot, images=images, fault=fault)
     cli('init', '--cpus=' + ','.join(map(str, ids)), '--memory=512MB', '--devices=none')
     cli('create', 'lifecycle-test', '--id=1', '--cpus=' + ','.join(map(str, ids)), '--memory=256MB')
+    if mode in ('failed-retain', 'lost-ack'):
+        sys.path.insert(0, '/payload')
+        from verify_retention import resources, release_control
+
+        def dmesg():
+            return subprocess.check_output(['/bin/busybox', 'dmesg']).decode()
+
+        def snapshot(state):
+            rows = resources(dmesg(), state)
+            assert rows, 'no published allocation snapshot: ' + state
+            return rows[-1]
+
+        # Positive release control before any hart is started or fault armed.
+        with open('/payload/vmlinux', 'rb') as kernel, open('/payload/secondary-initrd.cpio.gz', 'rb') as initrd:
+            kexec_file_load(kernel.fileno(), initrd.fileno(),
+                            'rdinit=/init console=mktty0 panic=1 mk_lifecycle_child=1',
+                            KEXEC_MULTIKERNEL | KEXEC_MK_ID(1))
+        control_resources = snapshot('loaded')
+        control_start = len(dmesg())
+        kexec_file_unload(KEXEC_MULTIKERNEL | KEXEC_MK_ID(1) | KEXEC_FILE_UNLOAD)
+        assert status() == 'ready'
+        cli('delete', 'lifecycle-test')
+        deadline = time.monotonic() + 20
+        while True:
+            control = dict(resources=control_resources, release_log=dmesg()[control_start:], host_alive=True)
+            try:
+                release_control(control)
+                break
+            except ValueError:
+                assert time.monotonic() < deadline, 'release control incomplete'
+                time.sleep(0.05)
+        marker('CONTROL', **control)
+        cli('create', 'lifecycle-test', '--id=1', '--cpus=' + ','.join(map(str, ids)), '--memory=256MB')
+
+        def retain(state, before, log_start, positive_trace):
+            assert 'mk_copy:' in positive_trace and 'mk_start:' in positive_trace
+            assert (trace_dir / 'tracing_on').read_text().strip() == '1'
+            root_before = (BASE / 'device_tree').read_bytes()
+            instance_before = (BASE / 'instances/lifecycle-test/device_tree').read_bytes()
+            removal = DeviceTreeManager().overlay_gen.generate_removal_overlay('lifecycle-test')
+            checks = {}
+            destroy_tx = None
+            for name, operation in {
+                'exec': lambda: boot_multikernel(1),
+                'unload': lambda: kexec_file_unload(KEXEC_MULTIKERNEL | KEXEC_MK_ID(1) | KEXEC_FILE_UNLOAD),
+                'destroy': lambda: require_failed_overlay(BASE, removal),
+            }.items():
+                trace.write_text('\n')
+                if name == 'destroy':
+                    destroy_tx = operation()
+                    result = 'failed'
+                else:
+                    result = require_errno(operation, errno.EBUSY)
+                evidence = trace.read_text()
+                assert 'mk_copy:' not in evidence and 'mk_start:' not in evidence
+                checks[name] = dict(error=result, trace=evidence.splitlines())
+                assert status() == state
+                assert (BASE / 'device_tree').read_bytes() == root_before
+                assert (BASE / 'instances/lifecycle-test/device_tree').read_bytes() == instance_before
+            after = snapshot(state)
+            for key in ('image', 'ctrl', 'manifest', 'ring', 'pool', 'size', 'owned'):
+                assert before[key] == after[key], (key, before, after)
+            assert after['tracked'] == 2
+            log = dmesg()[log_start:]
+            assert 'MK_TEST_FREE id=1 ' not in log
+            assert re.search(r'Failed to apply overlay transaction ' + destroy_tx[3:] + r': -16\b', log)
+            assert Path('/proc/sys/kernel/random/boot_id').read_text().strip() == host_boot
+            assert Path('/proc/sys/kernel/tainted').read_text().strip() == '0'
+            marker('RETAINED', state=state, harts=ids, checks=checks, resources_before=before,
+                   resources_after=after, guard_log=log, positive_trace=positive_trace.splitlines(),
+                   no_copy_or_start=True, ownership_unchanged=True, tracer_exercised=True,
+                   host_alive=True, destroy_tx=destroy_tx)
+            marker('PASS', mode=mode, cycles=1, host_alive=True, retained_until_vm_shutdown=True)
+            subprocess.run(['/bin/busybox', 'dmesg'], check=True)
     seen_boots = set()
     image_start = None
     for cycle in range(1, cycles + 1):
@@ -246,6 +324,17 @@ def main():
             raise AssertionError('child marker timed out')
 
         try:
+            if mode in ('failed-retain', 'lost-ack'):
+                log_start = len(dmesg())
+                trace.write_text('\n')
+            if mode == 'failed-retain':
+                result = require_errno(lambda: boot_multikernel(1), errno.EPERM)
+                assert status() == 'failed'
+                positive_trace = trace.read_text()
+                assert 'mk_copy:' in positive_trace and 'mk_start:' in positive_trace
+                marker('REJECTED', error=result, state='failed', tracer_exercised=True)
+                retain('failed', snapshot('failed'), log_start, positive_trace)
+                return
             if mode == 'deny-primary':
                 trace.write_text('\n')
                 result = require_errno(lambda: boot_multikernel(1), errno.EINVAL if fault == 2 else errno.EPERM)
@@ -277,7 +366,7 @@ def main():
             seen_boots.add(ready[4])
             os.write(fd, b'ping\n')
             read_until(rb'MK_CHILD_PONG\r?\n')
-            if mode in ('stuck-stop', 'loader-negative'):
+            if mode in ('stuck-stop', 'loader-negative', 'lost-ack'):
                 # Positive controls precede active-unload polling and trace clear.
                 before = trace.read_text()
                 assert 'mk_copy:' in before and 'mk_start:' in before
@@ -291,8 +380,39 @@ def main():
                    image_sha=image_sha, image_start=placement, active_unload_rejected=True)
             if mode == 'loader-negative':
                 marker('LOADER_RECOVERED', tracer_exercised=True)
+            if mode == 'lost-ack':
+                positive_trace = trace.read_text()
+                before = snapshot('active')
+                trace.write_text('\n')
+                started = time.monotonic()
+                result = require_errno(lambda: halt_multikernel(1), errno.ETIMEDOUT)
+                elapsed = time.monotonic() - started
+                assert 29 <= elapsed <= 65 and status() == 'active'
+                drops = re.findall(r'MK_TEST_ACK_DROPPED type=(\d+) operation=(\d+) resource=(\d+) request=(\d+) result=(-?\d+)', dmesg())
+                assert len(drops) == 1
+                ack = dict(zip(('type','operation','resource','request','result'), map(int, drops[0])))
+                assert ack['type'] == 0x3000 and ack['operation'] == 0x3002
+                assert ack['resource'] == 1 and ack['request'] > 0 and ack['result'] == 0
+                marker('TIMEOUT', error=result, state='active', elapsed=elapsed, ack=ack)
+                if fault == 7:
+                    retain('active', before, log_start, positive_trace)
+                    return
+                require_errno(lambda: kexec_file_unload(KEXEC_MULTIKERNEL | KEXEC_MK_ID(1) | KEXEC_FILE_UNLOAD), errno.EBUSY)
+                old_boot = ready[4]
+                os.close(fd)
+                fd = connect_console(1)
+                received.clear()
+                trace.write_text('\n')
+                boot_multikernel(1)
+                recovered = read_until(rb'MK_CHILD_READY online=(\S+) present=(\S+) possible=(\S+) boot=(\S+) release=(\S+)\r?\n')
+                assert recovered[4] != old_boot and recovered[5].decode() == expected_release
+                assert len(cpu_set(recovered[1].decode())) == 2
+                os.write(fd, b'ping\n')
+                read_until(rb'MK_CHILD_PONG\r?\n')
+                marker('RECOVERED', boot=recovered[4].decode(), host_alive=True,
+                       trace=trace.read_text().splitlines())
             trace.write_text('\n')
-            if mode in ('graceful', 'partial-start', 'stuck-stop', 'loader-negative'):
+            if mode in ('graceful', 'partial-start', 'stuck-stop', 'loader-negative', 'lost-ack'):
                 if mode == 'stuck-stop':
                     require_errno(lambda: halt_multikernel(1), errno.EBUSY)
                     assert status() == 'active'
