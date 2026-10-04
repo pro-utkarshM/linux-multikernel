@@ -138,12 +138,6 @@ static int mk_riscv_prime_icache(unsigned long hartid)
 	return mk_riscv_hart_stopped(hartid);
 }
 
-void mk_arch_send_ipi(mk_phys_cpu_t phys_cpu)
-{
-	/* Doorbell transport is the separate #28 series. */
-	pr_warn_once("RISC-V multikernel doorbells are not implemented\n");
-}
-
 void mk_arch_register_cpu(mk_phys_cpu_t phys_id)
 {
 	/* RISC-V CPU topology already records possible harts. */

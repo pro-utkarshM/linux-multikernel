@@ -3,3 +3,4 @@
 obj-y += spawn.o entry.o
 # Modern #27 adapter lives only on the test integration branch.
 obj-y += boot.o
+obj-y += doorbell.o
