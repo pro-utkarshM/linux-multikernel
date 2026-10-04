@@ -1,0 +1,67 @@
+# SPDX-License-Identifier: GPL-2.0-only
+import json
+import unittest
+from verify_lifecycle import verify
+
+
+def event(kind, **values):
+    return 'MK_LIFECYCLE_' + kind + ' ' + json.dumps(values) + '\n'
+
+
+def complete_log():
+    return ('OpenSBI v1.8.1\n' +
+            event('BEGIN', mode='graceful', harts=[65537], cycles=1, host_boot='host') +
+            'MK_CHILD_READY online=0 present=0 possible=0-3 boot=child release=linux-test\n' +
+            'MK_CHILD_PONG\n' +
+            event('CHILD', cycle=1, boot='child', assigned=[65537], online=[0],
+                  ring_roundtrip=True, release='linux-test') +
+            event('STOPPED', cycle=1, harts=[65537], host_alive=True) +
+            event('PASS', mode='graceful', cycles=1, host_alive=True))
+
+
+class Verification(unittest.TestCase):
+    def test_complete_native_evidence(self):
+        self.assertEqual(verify(complete_log(), 0, 'graceful', 1, 1)['result'], 'PASS')
+
+    def test_expected_panic_stack_requires_timeout_and_host_survival(self):
+        text = complete_log().replace('graceful', 'panic')
+        text += 'sysrq: Trigger a crash\nKernel panic - not syncing: sysrq\nCall Trace:\nRebooting in 1 seconds..\n'
+        self.assertEqual(verify(text, 0, 'panic', 1, 1)['result'], 'PASS')
+        with self.assertRaises(ValueError):
+            verify(text.replace('Rebooting in 1 seconds..', ''), 0, 'panic', 1, 1)
+
+    def test_timeout_or_failure_after_pass(self):
+        for text, code in ((complete_log(), 124),
+                           (complete_log() + event('FAIL', error='late'), 0),
+                           (complete_log() + 'WARNING: CPU: 0\n', 0)):
+            with self.assertRaises(ValueError):
+                verify(text, code, 'graceful', 1, 1)
+
+    def test_missing_out_of_order_or_duplicate_stop(self):
+        rows = complete_log().splitlines(keepends=True)
+        stopped = rows[-2]
+        for text in (complete_log().replace(stopped, ''),
+                     complete_log().replace(stopped, stopped + stopped),
+                     ''.join(rows[:-3] + [rows[-2], rows[-3], rows[-1]])):
+            with self.assertRaises(ValueError):
+                verify(text, 0, 'graceful', 1, 1)
+
+    def test_no_child_execution_or_roundtrip(self):
+        for field in ('MK_CHILD_READY', 'MK_CHILD_PONG', 'OpenSBI'):
+            text = '\n'.join(line for line in complete_log().splitlines() if field not in line)
+            with self.assertRaises(ValueError):
+                verify(text, 0, 'graceful', 1, 1)
+
+    def test_wrong_scope_and_reclaimed_before_stop(self):
+        for before, after in (('"ring_roundtrip": true', '"ring_roundtrip": false'),
+                              ('"host_alive": true', '"host_alive": false'),
+                              ('"assigned": [65537]', '"assigned": [7]'),
+                              ('"harts": [65537]', '"harts": []')):
+            with self.assertRaises(ValueError):
+                verify(complete_log().replace(before, after), 0, 'graceful', 1, 1)
+        with self.assertRaises(ValueError):
+            verify(complete_log(), 0, 'reboot', 1, 1)
+
+
+if __name__ == '__main__':
+    unittest.main()

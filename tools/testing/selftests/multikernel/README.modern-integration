@@ -1,0 +1,36 @@
+Modern QEMU test integration, not a production #27/#28 submission
+================================================================
+
+Branch test/riscv-final-stack-v5 carries separate modern manifest boot-tree
+and SBI software-IPI adapters above #23-25 and #26. Neither adapter implements
+AIA, general device assignment or ACPI synthesis. The parent endpoint is
+pinned locally; tests keep the top-level host running. Shared receive-ring
+reset does not cancel remote queued work or supply restart epochs (#7).
+
+The qemu-host-init.py/qemu-child-init recipes extend Nickolaev's #35 harness
+at 48507f176520b11a655344510b1b865b037e527f, with Kerf
+38daa5687d6748846ffd003599a3bfba29785cd6. Use that harness's unchanged
+scripts/build-initramfs.sh for fresh host/secondary output directories;
+host payload is named /payload/vmlinux but contains the raw RISC-V Image.
+Use the merged-/usr RISC-V runtime with Python, libfdt, Kerf and static BusyBox.
+
+Run bash qemu_lifecycle_test.sh KERNEL_BUILD HARNESS KERF_SOURCE RISCV_RUNTIME
+FIRMWARE OUTPUT_PARENT MODE HARTS CYCLES. OUTPUT_PARENT must end in /build;
+every invocation creates a fresh bundle and preserves failures. It verifies
+dependency pins, source cleanliness and exact Kerf runtime contents, reuses
+the unchanged pinned packing helper, freezes inputs and verifies raw logs.
+Build vmlinux/Image from the clean source immediately before packaging.
+
+Build CONFIG_MULTIKERNEL, CONFIG_MKTTY and CONFIG_KPROBES as built-ins. Boot
+QEMU virt/PLIC with stock OpenSBI, four harts, 2GiB, no network/host disks,
+console=ttyS0 rdinit=/init panic=0 kernelcore=1G log_buf_len=4M and
+mk_lifecycle_guard=modern-v5. Options: mk_lifecycle_mode=graceful|halt|poweroff|
+reboot|panic, mk_lifecycle_harts=1|2 and mk_lifecycle_cycles=1..50.
+
+The host must observe actual child PID1, exact assigned physical CPUs despite
+different logical numbering, a ping/pong through mktty, fresh child boot IDs,
+post-action HSM STOPPED evidence for every assigned hart and unchanged host
+boot ID. On failure, retain the entire archive/config/firmware/command/log and
+exit status. A process exit zero alone is never a pass. These recipes do not
+yet cover firmware fault injection, different-Image replacement, live CPU add,
+native callback/RCU concurrency or physical cache behavior.

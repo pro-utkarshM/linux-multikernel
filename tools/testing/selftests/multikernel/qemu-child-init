@@ -1,0 +1,39 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# Extends nickolaev/multikernel's secondary-init-riscv (48507f176520).
+[ "$$" = 1 ] || exit 1
+PATH=/bin:/sbin
+export PATH
+mount -t proc proc /proc || exit 1
+grep -q 'mk_lifecycle_child=1' /proc/cmdline || exit 1
+mount -t sysfs sysfs /sys || exit 1
+mount -t devtmpfs devtmpfs /dev || exit 1
+for node in /sys/devices/system/cpu/cpu[0-9]*/of_node; do
+    [ -r "$node/reg" ] || continue
+    cpu=${node%/of_node}
+    cpu=${cpu##*/cpu}
+    reg=$(/bin/busybox od -An -v -tx1 "$node/reg" | /bin/busybox tr -d ' \n')
+    printf 'MK_CHILD_CPU logical=%s reg=%s\n' "$cpu" "$reg"
+done
+printf 'MK_CHILD_READY online=%s present=%s possible=%s boot=%s release=%s\n' \
+    "$(cat /sys/devices/system/cpu/online)" "$(cat /sys/devices/system/cpu/present)" \
+    "$(cat /sys/devices/system/cpu/possible)" "$(cat /proc/sys/kernel/random/boot_id)" \
+    "$(/bin/busybox uname -r)"
+while read -r command; do
+    case "$command" in
+        ping) printf 'MK_CHILD_PONG\n' ;;
+        poweroff|reboot|halt|panic)
+            printf 'MK_CHILD_ACTION mode=%s\n' "$command"
+            sync
+            case "$command" in
+                poweroff) /bin/busybox poweroff -f ;;
+                reboot) /bin/busybox reboot -f ;;
+                halt) /bin/busybox halt -f ;;
+                panic) echo c >/proc/sysrq-trigger ;;
+            esac
+            printf 'MK_CHILD_FAIL termination-returned\n'
+            exit 1 ;;
+        *) printf 'MK_CHILD_FAIL unknown-command\n'; exit 1 ;;
+    esac
+done </dev/console
+exit 1
