@@ -61,8 +61,10 @@ on master. In particular, a STOPPED snapshot does not cancel a queued remote
 start. A caller returning a hart to the pool must fence outstanding work first.
 The ACK reproducer/proposal is maintained separately; no wire policy is changed.
 
-#26 supplies the Image loader; #27 must put the manifest in the actual boot DTB
-and reserve the control block correctly; #28 supplies SBI doorbells and lifecycle
+#26 supplies the Image loader; #27 uses the manifest itself as the primary a1
+boot tree and emits assigned hart/intc nodes and control/boot-page reservations.
+Do not layer the obsolete July host-DTB clone on the modern persistent manifest.
+#28 supplies SBI doorbells and lifecycle
 notifications. No #28 message is sent from these local machine stop paths. Without
 that follow-up the host is not automatically notified about a voluntary stop.
 No #7 dependency is introduced. Existing ring resets are not a proof that work
