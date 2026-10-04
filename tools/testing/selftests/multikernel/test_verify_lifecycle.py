@@ -30,12 +30,13 @@ class Verification(unittest.TestCase):
         stress += event('STRESS', cycle=1, unload_rejections=64,
                         console_roundtrips=64, console_closes=64, closing_sends=64,
                         worker_windows=[[100, 400], [200, 500]],
-                        incoming_workers_exercised=False)
+                        incoming_workers_exercised=False, force_stop_error=95)
         text = text.replace(stop, stress + stop)
         self.assertEqual(verify(text, 0, 'writer-stress', 1, 1)['result'], 'PASS')
         for before, after in (('token=round-17\n', 'token=round-16\n'),
                               ('"unload_rejections": 64', '"unload_rejections": 0'),
                               ('"console_closes": 64', '"console_closes": 63'),
+                              ('"force_stop_error": 95', '"force_stop_error": 0'),
                               ('[200, 500]', '[401, 500]'),
                               ('"incoming_workers_exercised": false',
                                '"incoming_workers_exercised": true')):

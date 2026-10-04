@@ -51,7 +51,8 @@ def verify(text, exit_status, mode, harts, cycles, images='same'):
             if (stress.get('cycle') != cycle or
                     any(stress.get(field) != 64 for field in
                         ('unload_rejections', 'console_roundtrips', 'console_closes', 'closing_sends')) or
-                    stress.get('incoming_workers_exercised') is not False):
+                    stress.get('incoming_workers_exercised') is not False or
+                    stress.get('force_stop_error') != 95):
                 raise ValueError('incomplete or overstated native writer scope')
             windows = stress.get('worker_windows')
             if (not isinstance(windows, list) or len(windows) != 2 or

@@ -445,12 +445,16 @@ def main():
             if mode == 'loader-negative':
                 marker('LOADER_RECOVERED', tracer_exercised=True)
             if mode == 'writer-stress':
+                force_error = require_errno(lambda: halt_multikernel(1, force=True), errno.EOPNOTSUPP)
+                assert status() == 'active'
+                assert (BASE / 'instances/lifecycle-test/device_tree').read_bytes() == ownership
                 # The original connection would receive replies before new
                 # connections, masking the release/receive exercise.
                 os.close(fd)
                 fd = None
                 result = writer_stress(lambda: kexec_file_unload(
                     KEXEC_MULTIKERNEL | KEXEC_MK_ID(1) | KEXEC_FILE_UNLOAD))
+                result['force_stop_error'] = force_error
                 assert status() == 'active'
                 assert (BASE / 'instances/lifecycle-test/device_tree').read_bytes() == ownership
                 marker('STRESS', cycle=cycle, **result)

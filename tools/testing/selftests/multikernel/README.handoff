@@ -11,7 +11,9 @@ Each unload must return EBUSY. Each console must receive its unique tagged
 response before release; a second ping is sent immediately before close to
 exercise receive/release timing. Both workers must finish, ownership must
 remain unchanged, and ordinary halt must confirm all assigned harts STOPPED
-before unloading and returning their resources. The first connection is
+before unloading and returning their resources. Unsupported RISC-V force-halt
+must return EOPNOTSUPP while preserving ACTIVE state and ownership. This is
+refusal qualification, not supported remote force-stop behavior. The first connection is
 closed before stress so it cannot mask receive on the temporary connections.
 
 Run Python fixture checks from the repository root:
