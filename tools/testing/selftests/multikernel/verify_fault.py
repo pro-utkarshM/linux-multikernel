@@ -64,9 +64,14 @@ def verify_fault(text, exit_status, mode, fault):
                 retained.get('host_alive') is not True or retained.get('no_copy_or_start') is not True or
                 retained.get('ownership_unchanged') is not True or
                 retained.get('tracer_exercised') is not True or
-                retained.get('rejected') != dict.fromkeys(('exec', 'unload', 'destroy'), 16) or
+                retained.get('rejected') != {'exec': 16, 'unload': 16, 'destroy': 'failed'} or
                 final.get('retained_until_vm_shutdown') is not True):
             raise ValueError('missing containment, rejection or lifetime proof')
+        transaction = retained.get('destroy_tx', '')
+        if (not re.fullmatch(r'tx_\d+', transaction) or
+                not re.search(r'Failed to apply overlay transaction ' +
+                              transaction[3:] + r': -16\b', text)):
+            raise ValueError('no correlated failed removal transaction')
         if not any(f'MK_FW_PENDING mode=7 hart={hart} actual=1 reported=3' in text for hart in harts):
             raise ValueError('permanent pending selector not exercised')
     return {'result': 'PASS', 'mode': mode, 'fault': fault, 'harts': harts}

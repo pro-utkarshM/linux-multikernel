@@ -87,6 +87,20 @@ def register_probe(trace_dir, command):
             os.close(fd)
 
 
+def require_failed_overlay(base, data):
+    overlays = base / 'overlays'
+    before = set(overlays.glob('tx_*'))
+    assert (overlays / 'new').write_bytes(data) == len(data)
+    created = set(overlays.glob('tx_*')) - before
+    assert len(created) == 1, 'missing or ambiguous removal transaction'
+    transaction = created.pop()
+    assert transaction.name.removeprefix('tx_').isdigit()
+    assert (transaction / 'status').read_text().strip() == 'failed'
+    assert (transaction / 'instance').read_text().strip() == '/instances'
+    assert (transaction / 'dtbo').read_bytes() == data
+    return transaction.name
+
+
 def main():
     mount('proc', '/proc', 'proc')
     args = Path('/proc/cmdline').read_text().split()
@@ -224,14 +238,19 @@ def main():
                     instance_before = (BASE / 'instances/lifecycle-test/device_tree').read_bytes()
                     removal = DeviceTreeManager().overlay_gen.generate_removal_overlay('lifecycle-test')
                     results = {}
+                    destroy_tx = None
                     operations = {
                         'exec': lambda: boot_multikernel(1),
                         'unload': lambda: kexec_file_unload(KEXEC_MULTIKERNEL | KEXEC_MK_ID(1) | KEXEC_FILE_UNLOAD),
-                        'destroy': lambda: (BASE / 'overlays/new').write_bytes(removal),
+                        'destroy': lambda: require_failed_overlay(BASE, removal),
                     }
                     for name, operation in operations.items():
                         trace.write_text('\n')
-                        results[name] = require_errno(operation, errno.EBUSY)
+                        if name == 'destroy':
+                            destroy_tx = operation()
+                            results[name] = 'failed'
+                        else:
+                            results[name] = require_errno(operation, errno.EBUSY)
                         evidence = trace.read_text()
                         assert 'mk_copy:' not in evidence and 'mk_start:' not in evidence
                         assert status() == 'active'
@@ -239,9 +258,14 @@ def main():
                         assert (BASE / 'instances/lifecycle-test/device_tree').read_bytes() == instance_before
                     assert Path('/proc/sys/kernel/random/boot_id').read_text().strip() == host_boot
                     assert Path('/proc/sys/kernel/tainted').read_text().strip() == '0'
+                    # The overlay API publishes failure in transaction metadata,
+                    # not the successful write's errno. Corroborate exact cause.
+                    log = subprocess.check_output(['/bin/busybox', 'dmesg']).decode()
+                    assert re.search(r'Failed to apply overlay transaction ' +
+                                     destroy_tx.removeprefix('tx_') + r': -16\b', log)
                     marker('RETAINED', rejected=results, harts=ids, host_alive=True,
                            state='active', no_copy_or_start=True, ownership_unchanged=True,
-                           tracer_exercised=True)
+                           tracer_exercised=True, destroy_tx=destroy_tx)
                     marker('PASS', mode=mode, cycles=1, host_alive=True, retained_until_vm_shutdown=True)
                     subprocess.run(['/bin/busybox', 'dmesg'], check=True)
                     return

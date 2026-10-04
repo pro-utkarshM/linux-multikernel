@@ -25,6 +25,11 @@ def pending_log():
 
 
 class Pending(unittest.TestCase):
+    def test_natural_pending_before_synthetic_pending_is_allowed(self):
+        text = pending_log().replace('mk_hsm_status: hart=7 state=3',
+                                     'mk_hsm_status: hart=7 state=3", "mk_hsm_status: hart=7 state=3', 1)
+        self.assertEqual(verify_pending(text, 0)['result'], 'PASS')
+
     def test_each_assigned_hart_injected_and_resolves(self):
         self.assertEqual(verify_pending(pending_log(), 0)['result'], 'PASS')
 

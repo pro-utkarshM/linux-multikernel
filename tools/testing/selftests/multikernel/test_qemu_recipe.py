@@ -4,6 +4,7 @@ import importlib.util
 import errno
 from pathlib import Path
 import unittest
+import tempfile
 from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location('recipe', Path(__file__).with_name('qemu-host-init.py'))
@@ -12,6 +13,22 @@ spec.loader.exec_module(recipe)
 
 
 class Recipe(unittest.TestCase):
+    def test_overlay_rejection_uses_transaction_status_not_write_errno(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            (base / 'overlays/tx_1').mkdir(parents=True)
+            original_write = Path.write_bytes
+            def apply(path, data):
+                self.assertEqual(path, base / 'overlays/new')
+                tx = base / 'overlays/tx_2'
+                tx.mkdir()
+                (tx / 'status').write_text('failed\n')
+                (tx / 'instance').write_text('/instances\n')
+                original_write(tx / 'dtbo', data)
+                return len(data)
+            with patch.object(recipe.Path, 'write_bytes', apply):
+                self.assertEqual(recipe.require_failed_overlay(base, b'dtbo'), 'tx_2')
+
     def test_probe_setup_reports_the_exact_rejected_command(self):
         with patch.object(recipe.os, 'open', return_value=7) as opened, \
                 patch.object(recipe.os, 'write', side_effect=OSError(errno.EINVAL, 'Invalid argument')), \

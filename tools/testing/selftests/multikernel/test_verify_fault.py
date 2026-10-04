@@ -30,14 +30,17 @@ class Fault(unittest.TestCase):
         text = (''.join(rows) + event('RETAINED', harts=[65537, 7], host_alive=True,
                                      state='active', no_copy_or_start=True, ownership_unchanged=True,
                                      tracer_exercised=True,
-                                     rejected=dict.fromkeys(('exec', 'unload', 'destroy'), 16)) +
+                                     rejected={'exec': 16, 'unload': 16, 'destroy': 'failed'}, destroy_tx='tx_3') +
                 event('PASS', mode='stuck-stop', cycles=1, host_alive=True, retained_until_vm_shutdown=True) +
                 'MK_FW_PENDING mode=7 hart=65537 actual=1 reported=3\n' +
-                'MK_FW_PENDING mode=7 hart=7 actual=1 reported=3\n')
+                'MK_FW_PENDING mode=7 hart=7 actual=1 reported=3\n' +
+                'Failed to apply overlay transaction 3: -16\n')
         self.assertEqual(verify_fault(text, 0, 'stuck-stop', 7)['result'], 'PASS')
         for before, after in (('"exec": 16', '"exec": 0'),
                               ('"ownership_unchanged": true', '"ownership_unchanged": false'),
-                              ('mode=7', 'mode=0'), ('"tracer_exercised": true', '"tracer_exercised": false')):
+                              ('mode=7', 'mode=0'), ('"tracer_exercised": true', '"tracer_exercised": false'),
+                              ('"destroy": "failed"', '"destroy": "applied"'),
+                              ('transaction 3: -16', 'transaction 4: -16')):
             with self.assertRaises(ValueError):
                 verify_fault(text.replace(before, after), 0, 'stuck-stop', 7)
 

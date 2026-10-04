@@ -19,9 +19,11 @@ def verify_pending(text, exit_status):
                         for match in re.finditer(r'\bhart=' + str(hart) + r' state=(\d+)\b', line)]
         first = observations.index(3) if 3 in observations else len(observations)
         suffix = observations[first:]
+        stopped_at = suffix.index(1) if 1 in suffix else len(suffix)
         if (any(state not in (0, 2) for state in observations[:first]) or
-                suffix[:32] != [3] * 32 or len(suffix) < 33 or
-                any(state != 1 for state in suffix[32:])):
+                stopped_at < 32 or stopped_at == len(suffix) or
+                any(state != 3 for state in suffix[:stopped_at]) or
+                any(state != 1 for state in suffix[stopped_at:])):
             raise ValueError('bounded pending-to-stopped polling not observed')
     result['fault'] = 'synthetic STOP_PENDING then actual STOPPED'
     return result
