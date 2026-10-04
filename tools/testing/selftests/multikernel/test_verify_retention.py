@@ -98,7 +98,8 @@ class Retention(unittest.TestCase):
         for broken in (text.replace('"state": "failed"', '"state": "active"'),
                        text.replace('MK_FW_PENDING mode=8', 'MK_FW_PENDING mode=7'),
                        text + event('PASS', mode='failed-retain', cycles=1, host_alive=True),
-                       text + 'WARNING: bad\n', text + 'MK_CHILD_READY unexpected\n'):
+                       text + 'WARNING: bad\n', text + 'MK_CHILD_READY unexpected\n',
+                       text + '[ 42.0] MK_TEST_FREE id=1 kind=pool phys=0 size=268435456 pool=2000\n'):
             with self.assertRaises(ValueError): self.verify(broken)
 
     def test_recovery_requires_latest_all_hart_stopped_before_copy(self):

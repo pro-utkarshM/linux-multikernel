@@ -253,6 +253,9 @@ def main():
             for key in ('image', 'ctrl', 'manifest', 'ring', 'pool', 'size', 'owned'):
                 assert before[key] == after[key], (key, before, after)
             assert after['tracked'] == 2
+            # Do not rely on a console-held instance reference for retention.
+            # Give any deferred release worker a scheduling opportunity.
+            time.sleep(0.2)
             log = dmesg()[log_start:]
             assert 'MK_TEST_FREE id=1 ' not in log
             assert re.search(r'Failed to apply overlay transaction ' + destroy_tx[3:] + r': -16\b', log)
@@ -333,6 +336,8 @@ def main():
                 positive_trace = trace.read_text()
                 assert 'mk_copy:' in positive_trace and 'mk_start:' in positive_trace
                 marker('REJECTED', error=result, state='failed', tracer_exercised=True)
+                os.close(fd)
+                fd = None
                 retain('failed', snapshot('failed'), log_start, positive_trace)
                 return
             if mode == 'deny-primary':
@@ -395,11 +400,14 @@ def main():
                 assert ack['resource'] == 1 and ack['request'] > 0 and ack['result'] == 0
                 marker('TIMEOUT', error=result, state='active', elapsed=elapsed, ack=ack)
                 if fault == 7:
+                    os.close(fd)
+                    fd = None
                     retain('active', before, log_start, positive_trace)
                     return
                 require_errno(lambda: kexec_file_unload(KEXEC_MULTIKERNEL | KEXEC_MK_ID(1) | KEXEC_FILE_UNLOAD), errno.EBUSY)
                 old_boot = ready[4]
                 os.close(fd)
+                fd = None
                 fd = connect_console(1)
                 received.clear()
                 trace.write_text('\n')
@@ -468,7 +476,8 @@ def main():
             marker('STOPPED', cycle=cycle, harts=ids, host_alive=True,
                    hsm_trace=[line for line in evidence.splitlines() if 'mk_hsm_status:' in line])
         finally:
-            os.close(fd)
+            if fd is not None:
+                os.close(fd)
         kexec_file_unload(KEXEC_MULTIKERNEL | KEXEC_MK_ID(1) | KEXEC_FILE_UNLOAD)
         assert status() == 'ready'
     cli('delete', 'lifecycle-test')

@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 """Private native retention lane; no synthetic claim of executing-hart safety."""
 import json
+from collections import Counter
 from pathlib import Path
 import re
 import sys
@@ -92,6 +93,10 @@ def verify_retention(text, exit_status, mode, fault):
             'Timeout waiting for operation 0x3002 on resource 1' not in raw):
             raise ValueError('matching successful ACK loss/real timeout absent')
     if mode=='failed-retain' or fault==7:
+        raw='\n'.join(line for line in text.splitlines() if not line.startswith('MK_LIFECYCLE_'))
+        pattern=r'MK_TEST_FREE id=1 kind=\w+ phys=[0-9a-f]+ size=\d+ pool=[0-9a-f]+'
+        if Counter(re.findall(pattern,raw))!=Counter(re.findall(pattern,data['CONTROL']['release_log'])):
+            raise ValueError('actual release outside the healthy control')
         retained=data['RETAINED']
         state='failed' if mode=='failed-retain' else 'active'
         before,after=retained.get('resources_before',{}),retained.get('resources_after',{})
