@@ -43,6 +43,7 @@ install -m 0755 "$test_dir/qemu-host-init.py" "$bundle/guest-host.py"
 install -m 0755 "$test_dir/qemu-child-init" "$bundle/guest-child"
 install -m 0644 "$test_dir/verify_lifecycle.py" "$bundle/verify_lifecycle.py"
 install -m 0644 "$test_dir/verify_fault.py" "$bundle/verify_fault.py"
+install -m 0644 "$test_dir/verify_pending.py" "$bundle/verify_pending.py"
 printf '%s\n' "$revision" > "$bundle/kernel-revision.txt"
 # Avoid merging /bin symlinks over the original harness's BusyBox directory.
 mkdir "$bundle/runtime-view"
@@ -72,7 +73,7 @@ bash "$harness/scripts/build-initramfs.sh" host "$bundle/host-initrd.cpio.gz" \
 (
     cd "$bundle"
     sha256sum Image vmlinux.unstripped kernel.config fw_dynamic.bin guest-host.py guest-child \
-        host-initrd.cpio.gz secondary-initrd.cpio.gz verify_lifecycle.py verify_fault.py \
+        host-initrd.cpio.gz secondary-initrd.cpio.gz verify_lifecycle.py verify_fault.py verify_pending.py \
         qemu-version.txt clang-version.txt harness-revision.txt kerf-revision.txt > SHA256SUMS
     if test -n "$alternate_build"; then
         sha256sum Image-alt vmlinux-alt.unstripped >> SHA256SUMS
@@ -93,3 +94,6 @@ case "$mode" in
         python3 "$bundle/verify_fault.py" "$bundle/serial.log" "$rc" "$mode" "$fault" ;;
     *) python3 "$bundle/verify_lifecycle.py" "$bundle/serial.log" "$rc" "$mode" "$harts" "$cycles" "$images" ;;
 esac
+if test "$fault" = 6; then
+    python3 "$bundle/verify_pending.py" "$bundle/serial.log" "$rc"
+fi
