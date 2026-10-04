@@ -14,6 +14,7 @@ import subprocess
 import sys
 import time
 import traceback
+import tempfile
 
 BASE = Path('/sys/fs/multikernel')
 
@@ -101,6 +102,20 @@ def require_failed_overlay(base, data):
     return transaction.name
 
 
+def mutate_image(data, case):
+    assert len(data) >= 64
+    changed = bytearray(data)
+    if case == 'bad-magic':
+        changed[56] ^= 1
+    elif case == 'bad-text-offset':
+        changed[8:16] = (4096).to_bytes(8, 'little')
+    elif case == 'image-too-large':
+        changed[16:24] = (512 * 1024 * 1024).to_bytes(8, 'little')
+    else:
+        raise ValueError('unsupported header mutation')
+    return changed
+
+
 def main():
     mount('proc', '/proc', 'proc')
     args = Path('/proc/cmdline').read_text().split()
@@ -112,12 +127,14 @@ def main():
     images = options.get('mk_lifecycle_images', 'same')
     fault = int(options.get('mk_lifecycle_fault', '0'))
     assert mode in ('graceful', 'halt', 'poweroff', 'reboot', 'panic',
-                    'deny-primary', 'partial-start', 'stuck-stop')
+                    'deny-primary', 'partial-start', 'stuck-stop', 'loader-negative')
     assert harts in (1, 2) and 1 <= cycles <= 50
     assert images in ('same', 'alternate') and (images == 'same' or cycles >= 2)
     if mode in ('deny-primary', 'partial-start', 'stuck-stop'):
         assert harts == 2 and cycles == 1 and images == 'same'
         assert fault in {'deny-primary': (1, 2, 3, 4), 'partial-start': (5,), 'stuck-stop': (7,)}[mode]
+    if mode == 'loader-negative':
+        assert cycles == 1 and images == 'same' and fault == 0
     mount('sysfs', '/sys', 'sysfs')
     mount('devtmpfs', '/dev', 'devtmpfs')
     # Preserve all host printk records, but do not interleave them with JSON.
@@ -129,7 +146,7 @@ def main():
     (trace_dir / 'kprobe_events').write_text(
         'r:mk_hsm_status sbi_hsm_hart_get_status hart=$arg1:u64 state=$retval:s32\n')
     (trace_dir / 'events/kprobes/mk_hsm_status/enable').write_text('1\n')
-    if mode == 'stuck-stop':
+    if mode in ('stuck-stop', 'loader-negative'):
         for command in ('p:mk_copy kimage_load_segment', 'p:mk_start sbi_hsm_hart_start'):
             register_probe(trace_dir, command)
         for event in ('mk_copy', 'mk_start'):
@@ -162,6 +179,34 @@ def main():
                        else '/payload/vmlinux')
         expected_release = Path(str(payload) + '.release').read_text().strip()
         image_sha = hashlib.sha256(payload.read_bytes()).hexdigest()
+        if mode == 'loader-negative':
+            assert status() == 'ready'
+            ownership = {path: (BASE / path).read_bytes() for path in
+                         ('device_tree', 'instances/lifecycle-test/device_tree')}
+            for case, expected in (('bad-magic', errno.EINVAL), ('bad-text-offset', errno.EINVAL),
+                                   ('image-too-large', errno.ENOMEM), ('initrd-too-large', errno.ENOMEM)):
+                trace.write_text('\n')
+                with tempfile.TemporaryFile() as bad_kernel, tempfile.TemporaryFile() as bad_initrd:
+                    if case == 'initrd-too-large':
+                        bad_kernel.write(payload.read_bytes())
+                        # Exceeds the 256MiB grant after Image allocation;
+                        # tests partial-loader allocation rollback, not only probe rejection.
+                        bad_initrd.truncate(256 * 1024 * 1024)
+                    else:
+                        bad_kernel.write(mutate_image(payload.read_bytes(), case))
+                        bad_initrd.write(Path('/payload/secondary-initrd.cpio.gz').read_bytes())
+                    bad_kernel.flush()
+                    bad_initrd.flush()
+                    result = require_errno(lambda: kexec_file_load(
+                        bad_kernel.fileno(), bad_initrd.fileno(),
+                        'rdinit=/init console=mktty0 panic=1 mk_lifecycle_child=1',
+                        KEXEC_MULTIKERNEL | KEXEC_MK_ID(1)), expected)
+                evidence = trace.read_text()
+                assert 'mk_copy:' not in evidence and 'mk_start:' not in evidence
+                assert status() == 'ready'
+                assert all((BASE / path).read_bytes() == data for path, data in ownership.items())
+                marker('LOAD_REJECTED', case=case, error=result, state='ready',
+                       no_copy_or_start=True, ownership_unchanged=True)
         with payload.open('rb') as kernel, open('/payload/secondary-initrd.cpio.gz', 'rb') as initrd:
             kexec_file_load(kernel.fileno(), initrd.fileno(),
                             'rdinit=/init console=mktty0 panic=1 mk_lifecycle_child=1',
@@ -217,7 +262,7 @@ def main():
             seen_boots.add(ready[4])
             os.write(fd, b'ping\n')
             read_until(rb'MK_CHILD_PONG\r?\n')
-            if mode == 'stuck-stop':
+            if mode in ('stuck-stop', 'loader-negative'):
                 # Positive controls precede active-unload polling and trace clear.
                 before = trace.read_text()
                 assert 'mk_copy:' in before and 'mk_start:' in before
@@ -229,8 +274,10 @@ def main():
             marker('CHILD', cycle=cycle, boot=ready[4].decode(), assigned=ids,
                    online=sorted(online), ring_roundtrip=True, release=ready[5].decode(),
                    image_sha=image_sha, image_start=placement, active_unload_rejected=True)
+            if mode == 'loader-negative':
+                marker('LOADER_RECOVERED', tracer_exercised=True)
             trace.write_text('\n')
-            if mode in ('graceful', 'partial-start', 'stuck-stop'):
+            if mode in ('graceful', 'partial-start', 'stuck-stop', 'loader-negative'):
                 if mode == 'stuck-stop':
                     require_errno(lambda: halt_multikernel(1), errno.EBUSY)
                     assert status() == 'active'

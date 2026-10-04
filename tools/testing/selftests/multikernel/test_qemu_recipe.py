@@ -13,6 +13,17 @@ spec.loader.exec_module(recipe)
 
 
 class Recipe(unittest.TestCase):
+    def test_loader_mutations_change_only_the_intended_header_fields(self):
+        image = bytes(range(128))
+        for case, offset, size, expected in (
+                ('bad-magic', 56, 1, image[56] ^ 1),
+                ('bad-text-offset', 8, 8, 4096),
+                ('image-too-large', 16, 8, 512 * 1024 * 1024)):
+            changed = recipe.mutate_image(image, case)
+            self.assertEqual(changed[:offset], image[:offset])
+            self.assertEqual(changed[offset + size:], image[offset + size:])
+            self.assertEqual(int.from_bytes(changed[offset:offset + size], 'little'), expected)
+
     def test_overlay_rejection_uses_transaction_status_not_write_errno(self):
         with tempfile.TemporaryDirectory() as directory:
             base = Path(directory)

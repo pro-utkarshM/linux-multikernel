@@ -7,7 +7,7 @@ import sys
 
 
 def verify(text, exit_status, mode, harts, cycles, images='same'):
-    if exit_status or mode not in ('graceful', 'halt', 'poweroff', 'reboot', 'panic', 'partial-start'):
+    if exit_status or mode not in ('graceful', 'halt', 'poweroff', 'reboot', 'panic', 'partial-start', 'loader-negative'):
         raise ValueError('failed process or unsupported mode')
     if harts not in (1, 2) or not 1 <= cycles <= 50:
         raise ValueError('unsupported topology or cycle count')

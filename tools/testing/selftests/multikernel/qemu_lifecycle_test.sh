@@ -16,7 +16,7 @@ alternate_build=${10:-}
 images=same
 test -z "$alternate_build" || images=alternate
 fault=${11:-0}
-case "$mode" in graceful|halt|poweroff|reboot|panic|deny-primary|partial-start|stuck-stop) ;; *) exit 2 ;; esac
+case "$mode" in graceful|halt|poweroff|reboot|panic|deny-primary|partial-start|stuck-stop|loader-negative) ;; *) exit 2 ;; esac
 [[ "$fault" =~ ^[0-7]$ ]] || exit 2
 case "$harts" in 1|2) ;; *) exit 2 ;; esac
 [[ "$cycles" =~ ^[1-9][0-9]?$ ]] && (( cycles <= 50 )) || exit 2
@@ -44,6 +44,7 @@ install -m 0755 "$test_dir/qemu-child-init" "$bundle/guest-child"
 install -m 0644 "$test_dir/verify_lifecycle.py" "$bundle/verify_lifecycle.py"
 install -m 0644 "$test_dir/verify_fault.py" "$bundle/verify_fault.py"
 install -m 0644 "$test_dir/verify_pending.py" "$bundle/verify_pending.py"
+install -m 0644 "$test_dir/verify_loader.py" "$bundle/verify_loader.py"
 printf '%s\n' "$revision" > "$bundle/kernel-revision.txt"
 # Avoid merging /bin symlinks over the original harness's BusyBox directory.
 mkdir "$bundle/runtime-view"
@@ -73,7 +74,7 @@ bash "$harness/scripts/build-initramfs.sh" host "$bundle/host-initrd.cpio.gz" \
 (
     cd "$bundle"
     sha256sum Image vmlinux.unstripped kernel.config fw_dynamic.bin guest-host.py guest-child \
-        host-initrd.cpio.gz secondary-initrd.cpio.gz verify_lifecycle.py verify_fault.py verify_pending.py \
+        host-initrd.cpio.gz secondary-initrd.cpio.gz verify_lifecycle.py verify_fault.py verify_pending.py verify_loader.py \
         qemu-version.txt clang-version.txt harness-revision.txt kerf-revision.txt > SHA256SUMS
     if test -n "$alternate_build"; then
         sha256sum Image-alt vmlinux-alt.unstripped >> SHA256SUMS
@@ -90,6 +91,8 @@ timeout --kill-after=5s "$((300 + cycles * 60))s" "${command[@]}" > "$bundle/ser
 printf '%s\n' "$rc" > "$bundle/exit-status.txt"
 tail -30 "$bundle/serial.log"
 case "$mode" in
+    loader-negative)
+        python3 "$bundle/verify_loader.py" "$bundle/serial.log" "$rc" "$harts" ;;
     deny-primary|partial-start|stuck-stop)
         python3 "$bundle/verify_fault.py" "$bundle/serial.log" "$rc" "$mode" "$fault" ;;
     *) python3 "$bundle/verify_lifecycle.py" "$bundle/serial.log" "$rc" "$mode" "$harts" "$cycles" "$images" ;;
