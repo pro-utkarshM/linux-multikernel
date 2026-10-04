@@ -28,6 +28,9 @@ static bool allocation_fails;
 	do { assert(!*(lock)); *(lock) = true; (flags) = 0; } while (0)
 #define spin_unlock_irqrestore(lock, flags) \
 	do { assert(*(lock)); *(lock) = false; (void)(flags); } while (0)
+#define DEFINE_RAW_SPINLOCK(name) DEFINE_SPINLOCK(name)
+#define raw_spin_lock_irqsave(lock, flags) spin_lock_irqsave(lock, flags)
+#define raw_spin_unlock_irqrestore(lock, flags) spin_unlock_irqrestore(lock, flags)
 #define msecs_to_jiffies(ms) (ms)
 
 struct completion {

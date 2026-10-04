@@ -70,9 +70,10 @@ static LIST_HEAD(mk_hotplug_ops);
 /*
  * A remove ACK must not overtake an earlier queued add. CPU requests share an
  * ordered queue; memory and device workers retain their existing scheduling.
- * The spinlock protects submission against queue detachment during cleanup.
+ * The raw lock protects submission against queue detachment during cleanup;
+ * the receive path runs in hard-IPI context, including on PREEMPT_RT.
  */
-static DEFINE_SPINLOCK(mk_cpu_hotplug_lock);
+static DEFINE_RAW_SPINLOCK(mk_cpu_hotplug_lock);
 static struct workqueue_struct *mk_cpu_hotplug_wq;
 
 static int mk_queue_cpu_work(struct work_struct *work)
@@ -80,12 +81,12 @@ static int mk_queue_cpu_work(struct work_struct *work)
 	unsigned long flags;
 	int ret = 0;
 
-	spin_lock_irqsave(&mk_cpu_hotplug_lock, flags);
+	raw_spin_lock_irqsave(&mk_cpu_hotplug_lock, flags);
 	if (mk_cpu_hotplug_wq)
 		queue_work(mk_cpu_hotplug_wq, work);
 	else
 		ret = -ESHUTDOWN;
-	spin_unlock_irqrestore(&mk_cpu_hotplug_lock, flags);
+	raw_spin_unlock_irqrestore(&mk_cpu_hotplug_lock, flags);
 	return ret;
 }
 
@@ -94,10 +95,10 @@ static struct workqueue_struct *mk_cpu_hotplug_detach(void)
 	struct workqueue_struct *wq;
 	unsigned long flags;
 
-	spin_lock_irqsave(&mk_cpu_hotplug_lock, flags);
+	raw_spin_lock_irqsave(&mk_cpu_hotplug_lock, flags);
 	wq = mk_cpu_hotplug_wq;
 	mk_cpu_hotplug_wq = NULL;
-	spin_unlock_irqrestore(&mk_cpu_hotplug_lock, flags);
+	raw_spin_unlock_irqrestore(&mk_cpu_hotplug_lock, flags);
 	return wq;
 }
 
@@ -1091,9 +1092,9 @@ int __init mk_hotplug_init(void)
 	if (!wq)
 		return -ENOMEM;
 
-	spin_lock_irqsave(&mk_cpu_hotplug_lock, flags);
+	raw_spin_lock_irqsave(&mk_cpu_hotplug_lock, flags);
 	mk_cpu_hotplug_wq = wq;
-	spin_unlock_irqrestore(&mk_cpu_hotplug_lock, flags);
+	raw_spin_unlock_irqrestore(&mk_cpu_hotplug_lock, flags);
 
 	/* Register handler for resource management messages */
 	ret = mk_register_msg_handler(MK_MSG_RESOURCE, mk_resource_msg_handler, NULL);
