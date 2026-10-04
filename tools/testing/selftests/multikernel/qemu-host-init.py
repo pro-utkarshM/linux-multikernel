@@ -36,6 +36,30 @@ def cpu_set(text):
     return result
 
 
+def connect_console(instance_id):
+    fd = os.open('/dev/mktty', os.O_RDWR | os.O_NONBLOCK)
+    try:
+        selection = (str(instance_id) + '\n').encode()
+        assert os.write(fd, selection) == len(selection)
+    except Exception:
+        os.close(fd)
+        raise
+    return fd
+
+
+def drain_console(fd, received, timeout=0):
+    # Bound one drain even if a misbehaving child continuously writes.
+    for _ in range(64):
+        if not select.select([fd], [], [], timeout)[0]:
+            return
+        data = os.read(fd, 4096)
+        assert data, 'console closed early'
+        print(data.decode(errors='replace'), end='', flush=True)
+        received.extend(data)
+        assert b'MK_CHILD_FAIL' not in received
+        timeout = 0
+
+
 def main():
     mount('proc', '/proc', 'proc')
     args = Path('/proc/cmdline').read_text().split()
@@ -81,7 +105,7 @@ def main():
                             'rdinit=/init console=mktty0 earlycon=sbi panic=1 mk_lifecycle_child=1',
                             KEXEC_MULTIKERNEL | KEXEC_MK_ID(1))
         assert status() == 'loaded'
-        fd = os.open('/dev/mktty', os.O_RDWR | os.O_NONBLOCK)
+        fd = connect_console(1)
         received = bytearray()
 
         def read_until(pattern):
@@ -90,13 +114,7 @@ def main():
                 found = re.search(pattern, received)
                 if found:
                     return found
-                if not select.select([fd], [], [], 1)[0]:
-                    continue
-                data = os.read(fd, 4096)
-                assert data, 'console closed early'
-                print(data.decode(errors='replace'), end='', flush=True)
-                received.extend(data)
-                assert b'MK_CHILD_FAIL' not in received
+                drain_console(fd, received, 1)
             raise AssertionError('child marker timed out')
 
         try:
@@ -122,13 +140,15 @@ def main():
             deadline = time.monotonic() + 20
             while status() != 'loaded':
                 assert time.monotonic() < deadline, 'halt did not settle'
-                time.sleep(0.1)
+                drain_console(fd, received, 0.1)
+            drain_console(fd, received)
             evidence = trace.read_text()
             for hart in ids:
                 assert re.search(r'hart=' + str(hart) + r' state=1\b', evidence), ('no stopped proof', hart)
             assert Path('/proc/sys/kernel/random/boot_id').read_text().strip() == host_boot
             assert Path('/proc/sys/kernel/tainted').read_text().strip() == '0'
-            marker('STOPPED', cycle=cycle, harts=ids, host_alive=True)
+            marker('STOPPED', cycle=cycle, harts=ids, host_alive=True,
+                   hsm_trace=[line for line in evidence.splitlines() if 'mk_hsm_status:' in line])
         finally:
             os.close(fd)
         kexec_file_unload(KEXEC_MULTIKERNEL | KEXEC_MK_ID(1) | KEXEC_FILE_UNLOAD)
@@ -147,6 +167,9 @@ if __name__ == '__main__':
         main()
     except Exception as error:
         marker('FAIL', error=repr(error))
+        trace = Path('/sys/kernel/tracing/trace')
+        if trace.exists():
+            print(trace.read_text(), flush=True)
         subprocess.run(['/bin/busybox', 'dmesg'])
     os.sync()
     ctypes.CDLL(None).reboot(0x4321FEDC)
