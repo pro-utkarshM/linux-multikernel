@@ -591,6 +591,33 @@ static void kimage_free_cma(struct kimage *image)
 
 }
 
+/*
+ * Release what a multikernel image holds: its segments in the instance pool,
+ * its load-time buffers and its reference on the instance. Also unwinds a
+ * load that failed before the image was published.
+ */
+void kimage_free_multikernel(struct kimage *image)
+{
+	struct mk_instance *instance = image->mk_instance;
+	unsigned long i;
+
+	for (i = 0; i < image->nr_segments; i++)
+		mk_kimage_free(image, phys_to_virt(image->segment[i].mem),
+			       image->segment[i].memsz);
+
+	/* Load-time buffers were kept as the source for each spawn */
+	kimage_file_post_load_cleanup(image);
+
+	if (instance->kimage == image) {
+		/* No kernel left to read the ring */
+		instance->ipi_data = NULL;
+		instance->kimage = NULL;
+		mk_instance_set_state(instance, MK_STATE_READY);
+	}
+	mk_instance_put(instance);
+	image->mk_instance = NULL;
+}
+
 void kimage_free(struct kimage *image)
 {
 	kimage_entry_t *ptr, entry;
@@ -606,46 +633,9 @@ void kimage_free(struct kimage *image)
 	else if (image == kexec_crash_image)
 		kimage_update_compat_pointers(NULL, KEXEC_TYPE_CRASH);
 
-	if (image->type == KEXEC_TYPE_MULTIKERNEL) {
-		unsigned long i;
+	if (image->type == KEXEC_TYPE_MULTIKERNEL)
+		kimage_free_multikernel(image);
 
-		for (i = 0; i < image->nr_segments; i++) {
-			void *virt_addr = phys_to_virt(image->segment[i].mem);
-
-			mk_kimage_free(image, virt_addr, image->segment[i].memsz);
-		}
-
-		/* Load-time buffers were kept as the source for each spawn */
-		kimage_file_post_load_cleanup(image);
-
-		if (image->mk_instance) {
-			/*
-			 * The ring is freed below. Drop the instance's pointer
-			 * to it first, or the next message sent to this
-			 * instance lands in pages the allocator has already
-			 * handed to someone else.
-			 */
-			image->mk_instance->ipi_data = NULL;
-			image->mk_instance->ipi_phys = 0;
-			image->mk_instance->kimage = NULL;
-			mk_instance_set_state(image->mk_instance, MK_STATE_READY);
-			mk_instance_put(image->mk_instance);
-			image->mk_instance = NULL;
-		}
-
-		if (image->mk_manifest) {
-			__free_pages(phys_to_page(image->mk_manifest),
-				     get_order(MK_MANIFEST_SIZE));
-			image->mk_manifest = 0;
-		}
-
-		if (image->mk_ipi) {
-			size_t ipi_buffer_size = sizeof(struct mk_shared_data);
-			unsigned int order = get_order(ipi_buffer_size);
-			__free_pages(phys_to_page(image->mk_ipi), order);
-			image->mk_ipi = 0;
-		}
-	}
 #ifdef CONFIG_CRASH_DUMP
 	if (image->vmcoreinfo_data_copy) {
 		crash_update_vmcoreinfo_safecopy(NULL);
@@ -1206,21 +1196,6 @@ void kimage_update_compat_pointers(struct kimage *new_image, int type)
 	mutex_unlock(&kexec_image_mutex);
 }
 
-int kimage_get_all_by_type(int type, struct kimage **images, int max_count)
-{
-	struct kimage *image;
-	int count = 0;
-
-	mutex_lock(&kexec_image_mutex);
-	list_for_each_entry(image, &kexec_image_list, list) {
-		if (image->type == type && count < max_count) {
-			images[count++] = image;
-		}
-	}
-	mutex_unlock(&kexec_image_mutex);
-	return count;
-}
-
 void kimage_list_lock(void)
 {
 	mutex_lock(&kexec_image_mutex);
@@ -1759,21 +1734,6 @@ int multikernel_kexec_by_id(int mk_id)
 		pr_warn("Manifest finalization failed: %d\n", rc);
 	else
 		pr_info("Manifest finalized for multikernel instance\n");
-
-	/*
-	 * Point at the ring this image actually carries. Every load
-	 * allocates a new one and publishes it through KHO, so the spawn
-	 * kernel maps whatever the image says - while the host would
-	 * otherwise keep using the pointer it cached on its first send,
-	 * which after a re-load belongs to nobody. The two then never see
-	 * each other's messages.
-	 */
-	if (mk_image->mk_ipi) {
-		instance->ipi_phys = mk_image->mk_ipi;
-		instance->ipi_data = phys_to_virt(mk_image->mk_ipi);
-		instance->ipi_pages =
-			PAGE_ALIGN(sizeof(struct mk_shared_data)) >> PAGE_SHIFT;
-	}
 
 	/*
 	 * Start the instance with an empty ring. It outlives the kernel

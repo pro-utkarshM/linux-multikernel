@@ -550,8 +550,7 @@ extern struct mk_instance *host_instance;
  * Used by instance management to track both resource hierarchy and pool chunks.
  */
 struct mk_memory_region {
-	struct resource res;            /* The actual resource */
-	struct gen_pool_chunk *chunk;   /* Associated gen_pool chunk */
+	struct resource res;            /* The actual resource, one instance pool chunk */
 	struct list_head list;          /* List entry for management */
 };
 
@@ -665,10 +664,20 @@ struct mk_instance {
 	int platform_device_count;           /* Number of platform devices */
 	bool platform_devices_valid;         /* Whether platform device list is valid */
 
-	/* IPI communication buffer */
+	/*
+	 * IPI communication buffer. ipi_data is set only while the ring can
+	 * be addressed: always for this kernel's own records, and on the host
+	 * while an image is loaded for the instance.
+	 */
 	struct mk_shared_data *ipi_data; /* IPI shared memory buffer (virtual address) */
 	phys_addr_t ipi_phys;           /* IPI buffer physical address */
 	u32 ipi_pages;                  /* IPI buffer size in pages */
+	/*
+	 * Host side only: the page the instance's boot tree is written to at
+	 * each exec. It and the IPI ring are allocated on the first load and
+	 * freed with the instance; a zero here means the host owns neither.
+	 */
+	phys_addr_t manifest_phys;
 	/*
 	 * On a spawn's record of its host: the physical address of the
 	 * host's pool wake slot, where the host's CPUs park. A backup
@@ -846,6 +855,7 @@ struct mk_instance *mk_instance_find_by_name(const char *name);
  * Returns the instance pointer for convenience.
  */
 struct mk_instance *mk_instance_get(struct mk_instance *instance);
+int mk_instance_alloc_boot_pages(struct mk_instance *instance);
 
 /**
  * mk_halt_to_pool() - Halt this spawn kernel, returning its CPUs to the pool
@@ -886,6 +896,12 @@ int mk_instance_add_memory_region(struct mk_instance *instance, size_t size,
 				  int node);
 int mk_instance_remove_memory_region(struct mk_instance *instance,
 				     phys_addr_t phys_addr, size_t size);
+int mk_instance_begin_memory_removal(struct mk_instance *instance,
+				     phys_addr_t phys_addr, size_t size);
+void mk_instance_abort_memory_removal(struct mk_instance *instance,
+				      phys_addr_t phys_addr, size_t size);
+void mk_instance_finish_memory_removal(struct mk_instance *instance,
+				       phys_addr_t phys_addr, size_t size);
 int mk_instance_add_pci_device(struct mk_instance *instance,
 			       u16 domain, u8 bus, u8 devfn);
 int mk_instance_remove_pci_device(struct mk_instance *instance,
