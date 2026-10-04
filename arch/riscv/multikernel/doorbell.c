@@ -102,8 +102,8 @@ static int __init mk_riscv_doorbell_init(void)
 	int state;
 
 	state = cpuhp_setup_state_nocalls(CPUHP_AP_ONLINE_DYN,
-					"multikernel/sbi:receiver", NULL,
-					mk_riscv_receiver_offline);
+					  "multikernel/sbi:receiver", NULL,
+					  mk_riscv_receiver_offline);
 	if (state < 0)
 		return state;
 	if (host_instance) {
