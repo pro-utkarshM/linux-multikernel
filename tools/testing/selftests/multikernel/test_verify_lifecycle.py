@@ -15,7 +15,7 @@ def complete_log():
             'MK_CHILD_PONG\n' +
             event('CHILD', cycle=1, boot='child', assigned=[65537], online=[0],
                   ring_roundtrip=True, release='linux-test', image_sha='a' * 64,
-                  image_start=0x90000000) +
+                  image_start=0x90000000, active_unload_rejected=True) +
             event('STOPPED', cycle=1, harts=[65537], host_alive=True,
                   hsm_trace=['kerf-1 [000] 1.000: mk_hsm_status: hart=65537 state=1']) +
             event('PASS', mode='graceful', cycles=1, host_alive=True))
@@ -44,6 +44,9 @@ class Verification(unittest.TestCase):
                               ('"image_sha": "' + 'a' * 64 + '"', '"image_sha": ""')):
             with self.assertRaises(ValueError):
                 verify(complete_log().replace(before, after), 0, 'graceful', 1, 1)
+        with self.assertRaises(ValueError):
+            verify(complete_log().replace('"active_unload_rejected": true', '"active_unload_rejected": false'),
+                   0, 'graceful', 1, 1)
 
     def test_raw_hsm_stop_evidence_is_required(self):
         text = complete_log()

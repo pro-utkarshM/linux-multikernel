@@ -57,13 +57,16 @@ and Image header for QEMU virt, not a historical literal address. It records
 source, selector, patch, host hashes, command, build log and firmware hashes.
 
 Modes: 0 off; 1 denied priming; 2 invalid priming; 3 second priming denied;
-4 denied actual primary start; 5 denied secondary start after primary start;
+4 denied actual primary start; 5 persistently denied child-stub secondary starts
+after primary start (host return to a different entry remains allowed);
 6 synthetic STOP_PENDING for 32 polls after actual STOPPED, then resolves;
 7 synthetic permanent STOP_PENDING after actual STOPPED. All selectors are
 test-only. Modes 6/7 intentionally hide firmware's actual STOPPED state to
 exercise host confirmation/retention, not emulate a hart still executing.
 Unknown/sparse hart IDs are translated by firmware's mapping, never array
 indexed directly. opensbi_fault_test.sh checks selectors at modeled boundaries.
+Modes 1..4 are one-shot. Mode 5 defers its marker until a host status query,
+avoiding firmware/host UART character interleaving during child boot logs.
 
 Mode 6 uses the normal graceful/two-hart/one-cycle recipe and must additionally
 pass verify_pending.py SERIAL_LOG EXIT_STATUS. It requires an injection marker
@@ -74,7 +77,11 @@ build argument and FAULT_MODE=1..4|5|7 respectively. The frozen fault verifier
 requires firmware injection markers, exact errno and confirmed cleanup for
 denied starts; reduced online membership and every hart stopped after partial
 start; and blocked exec/unload/kernel deletion with retained ownership for a
-permanently pending report. Deletion writes an actual removal overlay through
+permanently pending report. Failed halt confirmation retains ACTIVE on this
+source; do not fabricate FAILED to make a test pass. This exercises active
+retention, not FAILED-state reclamation, which needs a separate reachable
+test setup. Positive trace controls precede no-copy/no-start assertions.
+Deletion writes an actual removal overlay through
 current Kerf, not a userspace status veto or an unsupported instance rmdir.
 No public bulk-unload syscall exists on this source; its generic free guard
 requires separate test-only native instrumentation, not invented ID-zero ABI.

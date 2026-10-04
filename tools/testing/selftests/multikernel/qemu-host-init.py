@@ -187,6 +187,11 @@ def main():
             seen_boots.add(ready[4])
             os.write(fd, b'ping\n')
             read_until(rb'MK_CHILD_PONG\r?\n')
+            if mode == 'stuck-stop':
+                # Positive controls precede active-unload polling and trace clear.
+                before = trace.read_text()
+                assert 'mk_copy:' in before and 'mk_start:' in before
+                assert (trace_dir / 'tracing_on').read_text().strip() == '1'
             ownership = (BASE / 'instances/lifecycle-test/device_tree').read_bytes()
             require_errno(lambda: kexec_file_unload(KEXEC_MULTIKERNEL | KEXEC_MK_ID(1) | KEXEC_FILE_UNLOAD), errno.EBUSY)
             assert status() == 'active'
@@ -198,7 +203,7 @@ def main():
             if mode in ('graceful', 'partial-start', 'stuck-stop'):
                 if mode == 'stuck-stop':
                     require_errno(lambda: halt_multikernel(1), errno.EBUSY)
-                    assert status() == 'failed'
+                    assert status() == 'active'
                     root_before = (BASE / 'device_tree').read_bytes()
                     instance_before = (BASE / 'instances/lifecycle-test/device_tree').read_bytes()
                     removal = DeviceTreeManager().overlay_gen.generate_removal_overlay('lifecycle-test')
@@ -213,13 +218,14 @@ def main():
                         results[name] = require_errno(operation, errno.EBUSY)
                         evidence = trace.read_text()
                         assert 'mk_copy:' not in evidence and 'mk_start:' not in evidence
-                        assert status() == 'failed'
+                        assert status() == 'active'
                         assert (BASE / 'device_tree').read_bytes() == root_before
                         assert (BASE / 'instances/lifecycle-test/device_tree').read_bytes() == instance_before
                     assert Path('/proc/sys/kernel/random/boot_id').read_text().strip() == host_boot
                     assert Path('/proc/sys/kernel/tainted').read_text().strip() == '0'
                     marker('RETAINED', rejected=results, harts=ids, host_alive=True,
-                           state='failed', no_copy_or_start=True, ownership_unchanged=True)
+                           state='active', no_copy_or_start=True, ownership_unchanged=True,
+                           tracer_exercised=True)
                     marker('PASS', mode=mode, cycles=1, host_alive=True, retained_until_vm_shutdown=True)
                     subprocess.run(['/bin/busybox', 'dmesg'], check=True)
                     return

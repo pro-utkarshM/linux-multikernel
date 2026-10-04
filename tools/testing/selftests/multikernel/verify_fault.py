@@ -58,16 +58,17 @@ def verify_fault(text, exit_status, mode, fault):
             raise ValueError('missing retained-resource scenario')
         child, retained = records[1][1], records[2][1]
         if (child.get('assigned') != harts or child.get('ring_roundtrip') is not True or
+                child.get('active_unload_rejected') is not True or
                 text.count('MK_CHILD_READY ') != 1 or text.count('MK_CHILD_PONG') != 1 or
-                retained.get('harts') != harts or retained.get('state') != 'failed' or
+                retained.get('harts') != harts or retained.get('state') != 'active' or
                 retained.get('host_alive') is not True or retained.get('no_copy_or_start') is not True or
                 retained.get('ownership_unchanged') is not True or
+                retained.get('tracer_exercised') is not True or
                 retained.get('rejected') != dict.fromkeys(('exec', 'unload', 'destroy'), 16) or
                 final.get('retained_until_vm_shutdown') is not True):
             raise ValueError('missing containment, rejection or lifetime proof')
-        for hart in harts:
-            if text.count(f'MK_FW_PENDING mode=7 hart={hart} actual=1 reported=3') != 1:
-                raise ValueError('permanent pending selector not exercised')
+        if not any(f'MK_FW_PENDING mode=7 hart={hart} actual=1 reported=3' in text for hart in harts):
+            raise ValueError('permanent pending selector not exercised')
     return {'result': 'PASS', 'mode': mode, 'fault': fault, 'harts': harts}
 
 

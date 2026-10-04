@@ -18,7 +18,7 @@ def pending_log():
                 value['assigned'] = [65537, 7]
             if 'hsm_trace' in value:
                 value['hsm_trace'] = [f'mk_hsm_status: hart={hart} state={state}'
-                                      for hart in [65537, 7] for state in [3, 1]]
+                                      for hart in [65537, 7] for state in [0, 2] + [3] * 32 + [1]]
             rows[index] = kind + ' ' + json.dumps(value) + '\n'
     return ''.join(rows) + ''.join(f'MK_FW_PENDING mode=6 hart={hart} actual=1 reported=3\n'
                                  for hart in [65537, 7])
@@ -33,6 +33,8 @@ class Pending(unittest.TestCase):
                               ('hart=7 state=1', 'hart=7 state=3')):
             with self.assertRaises(ValueError):
                 verify_pending(pending_log().replace(before, after), 0)
+        with self.assertRaises(ValueError):
+            verify_pending(pending_log().replace('mk_hsm_status: hart=7 state=3', '', 1), 0)
 
 
 if __name__ == '__main__':

@@ -17,7 +17,11 @@ def verify_pending(text, exit_status):
             raise ValueError('firmware did not inject the requested hart status')
         observations = [int(match[1]) for line in stopped['hsm_trace']
                         for match in re.finditer(r'\bhart=' + str(hart) + r' state=(\d+)\b', line)]
-        if len(observations) < 2 or observations[0] != 3 or observations[-1] != 1:
+        first = observations.index(3) if 3 in observations else len(observations)
+        suffix = observations[first:]
+        if (any(state not in (0, 2) for state in observations[:first]) or
+                suffix[:32] != [3] * 32 or len(suffix) < 33 or
+                any(state != 1 for state in suffix[32:])):
             raise ValueError('bounded pending-to-stopped polling not observed')
     result['fault'] = 'synthetic STOP_PENDING then actual STOPPED'
     return result

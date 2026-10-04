@@ -18,6 +18,8 @@ static void spin_lock(spinlock_t *p) { assert(!*p); *p = true; }
 static void spin_unlock(spinlock_t *p) { assert(*p); *p = false; }
 static u32 sbi_hartid_to_hartindex(u32 hart) { return hart == 65537 ? 0 : hart == 7 ? 1 : 128; }
 #define sbi_printf(...) do { } while (0)
+#define CSR_MHARTID 0
+#define csr_read(csr) 3
 #include "opensbi_test_hsm.h"
 
 int main(void)
@@ -39,6 +41,10 @@ int main(void)
 		mk_test_hsm_started(65537, 0x88000000, 0x89000000);
 	rc = mk_test_hsm_start(7, 0x88000000, 0x89000000);
 	assert(rc == (MK_TEST_FAULT == 5 ? SBI_EDENIED : 0));
+	if (MK_TEST_FAULT == 5) {
+		assert(mk_test_hsm_start(7, 0x88000000, 0x89000000) == SBI_EDENIED);
+		assert(!mk_test_hsm_start(7, 0x80201000, 0x81000000));
+	}
 	if (MK_TEST_FAULT == 6 || MK_TEST_FAULT == 7) {
 		assert(mk_test_hsm_status(65537, 0) == 0);
 		for (int i = 0; i < 32; i++)

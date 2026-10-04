@@ -44,7 +44,8 @@ def verify(text, exit_status, mode, harts, cycles, images='same'):
         child, stopped = records[2 * cycle - 1][1], records[2 * cycle][1]
         if (child.get('cycle') != cycle or stopped.get('cycle') != cycle or
                 child.get('assigned') != begin['harts'] or stopped.get('harts') != begin['harts'] or
-                child.get('ring_roundtrip') is not True or stopped.get('host_alive') is not True or
+                child.get('ring_roundtrip') is not True or child.get('active_unload_rejected') is not True or
+                stopped.get('host_alive') is not True or
                 not child.get('boot') or child['boot'] in boots or
                 child['boot'] == begin.get('host_boot')):
             raise ValueError('incomplete ownership, stop or new-child evidence')
