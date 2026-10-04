@@ -22,6 +22,7 @@ printf 'MK_CHILD_READY online=%s present=%s possible=%s boot=%s release=%s\n' \
 while read -r command; do
     case "$command" in
         ping) printf 'MK_CHILD_PONG\n' ;;
+        ping:*) printf 'MK_CHILD_PONG token=%s\n' "${command#ping:}" ;;
         poweroff|reboot|halt|panic)
             printf 'MK_CHILD_ACTION mode=%s\n' "$command"
             sync

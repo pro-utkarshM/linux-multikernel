@@ -1,0 +1,41 @@
+Lifecycle-first handoff reproduction
+===================================
+
+This branch is test-only integration, not the #23--#25 submission. It contains
+the separate #26 loader and explicitly temporary modern #27/#28 adapters.
+Do not merge it as production support for those issues.
+
+The writer-stress recipe runs a real two-hart child, then 64 barrier-paired
+active-unload attempts and 64 MKTTY open/tagged-ping/read/close operations.
+Each unload must return EBUSY. Each console must receive its unique tagged
+response before release; a second ping is sent immediately before close to
+exercise receive/release timing. Both workers must finish, ownership must
+remain unchanged, and ordinary halt must confirm all assigned harts STOPPED
+before unloading and returning their resources. The first connection is
+closed before stress so it cannot mask receive on the temporary connections.
+
+Run Python fixture checks from the repository root:
+
+  python3 -B -m unittest discover -s tools/testing/selftests/multikernel -p 'test_*.py'
+
+After building this exact clean revision (RV64 MULTIKERNEL/MKTTY/KPROBES), use:
+
+  bash tools/testing/selftests/multikernel/qemu_lifecycle_test.sh \
+    KERNEL_BUILD HARNESS_CHECKOUT KERF_CHECKOUT RISCV_RUNTIME_ROOT \
+    HOST_BOUND_FW_DYNAMIC_BIN OUTPUT_PARENT/build writer-stress 2 1
+
+Dependencies: #35 harness48507f176520b11a655344510b1b865b037e527f,
+Kerf38daa5687d6748846ffd003599a3bfba29785cd6. The harness and Kerf checkouts
+must be clean. Supply the RISC-V runtime root prepared using the pinned #35
+packing flow. Firmware must be rebuilt/bound to this exact host ELF/Image;
+the integration priming address is derived from the ELF, not copied from an
+older evidence bundle. See opensbi_fault_build.sh for host-bound firmware.
+
+The recipe preserves the exact command, serial log, source revision, config,
+Images/ELFs, verifier, dependency pins and SHA256SUMS in a fresh bundle.
+Verifier failure or nonzero exit is never a pass.
+
+This is bounded native stress, not forced kernel interleaving, callback
+unregistration/RCU grace-period qualification, or incoming CPU-worker stress.
+It does not establish AIA/device filtering, real domain denial, DMA quiescence,
+mixed-version ACK compatibility, or a physical stale-I-cache hazard result.

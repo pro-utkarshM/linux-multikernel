@@ -16,7 +16,7 @@ alternate_build=${10:-}
 images=same
 test -z "$alternate_build" || images=alternate
 fault=${11:-0}
-case "$mode" in graceful|halt|poweroff|reboot|panic|deny-primary|partial-start|stuck-stop|loader-negative|failed-retain|lost-ack) ;; *) exit 2 ;; esac
+case "$mode" in graceful|halt|poweroff|reboot|panic|deny-primary|partial-start|stuck-stop|loader-negative|failed-retain|lost-ack|writer-stress) ;; *) exit 2 ;; esac
 [[ "$fault" =~ ^[0-8]$ ]] || exit 2
 case "$harts" in 1|2) ;; *) exit 2 ;; esac
 [[ "$cycles" =~ ^[1-9][0-9]?$ ]] && (( cycles <= 50 )) || exit 2

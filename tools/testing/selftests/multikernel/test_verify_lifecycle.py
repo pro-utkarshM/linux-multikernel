@@ -22,6 +22,26 @@ def complete_log():
 
 
 class Verification(unittest.TestCase):
+    def test_writer_stress_requires_real_roundtrips_and_overlapping_workers(self):
+        text = complete_log().replace('graceful', 'writer-stress')
+        stop = next(line for line in text.splitlines(keepends=True)
+                    if line.startswith('MK_LIFECYCLE_STOPPED'))
+        stress = ''.join('MK_CHILD_PONG token=round-%d\n' % i for i in range(64))
+        stress += event('STRESS', cycle=1, unload_rejections=64,
+                        console_roundtrips=64, console_closes=64, closing_sends=64,
+                        worker_windows=[[100, 400], [200, 500]],
+                        incoming_workers_exercised=False)
+        text = text.replace(stop, stress + stop)
+        self.assertEqual(verify(text, 0, 'writer-stress', 1, 1)['result'], 'PASS')
+        for before, after in (('token=round-17\n', 'token=round-16\n'),
+                              ('"unload_rejections": 64', '"unload_rejections": 0'),
+                              ('"console_closes": 64', '"console_closes": 63'),
+                              ('[200, 500]', '[401, 500]'),
+                              ('"incoming_workers_exercised": false',
+                               '"incoming_workers_exercised": true')):
+            with self.assertRaises(ValueError):
+                verify(text.replace(before, after), 0, 'writer-stress', 1, 1)
+
     def test_alternating_images_require_distinct_execution_and_fixed_address(self):
         rows = complete_log().splitlines(keepends=True)
         begin = json.loads(rows[1].partition(' ')[2])

@@ -7,7 +7,7 @@ import sys
 
 
 def verify(text, exit_status, mode, harts, cycles, images='same'):
-    if exit_status or mode not in ('graceful', 'halt', 'poweroff', 'reboot', 'panic', 'partial-start', 'loader-negative'):
+    if exit_status or mode not in ('graceful', 'halt', 'poweroff', 'reboot', 'panic', 'partial-start', 'loader-negative', 'writer-stress'):
         raise ValueError('failed process or unsupported mode')
     if harts not in (1, 2) or not 1 <= cycles <= 50:
         raise ValueError('unsupported topology or cycle count')
@@ -25,7 +25,10 @@ def verify(text, exit_status, mode, harts, cycles, images='same'):
         raise ValueError('no firmware identity')
     matches = list(re.finditer(r'^MK_LIFECYCLE_(\w+) ([^\n]*)$', text, re.MULTILINE))
     records = [(match[1], json.loads(match[2])) for match in matches]
-    if [name for name, _ in records] != ['BEGIN'] + ['CHILD', 'STOPPED'] * cycles + ['PASS']:
+    phases = ['CHILD', 'STRESS', 'STOPPED'] if mode == 'writer-stress' else ['CHILD', 'STOPPED']
+    if mode == 'writer-stress' and (cycles != 1 or images != 'same'):
+        raise ValueError('writer stress requires one same-Image cycle')
+    if [name for name, _ in records] != ['BEGIN'] + phases * cycles + ['PASS']:
         raise ValueError('missing, duplicate or out-of-order scenario')
     begin, final = records[0][1], records[-1][1]
     if (begin.get('mode') != mode or begin.get('cycles') != cycles or
@@ -34,14 +37,32 @@ def verify(text, exit_status, mode, harts, cycles, images='same'):
             final.get('mode') != mode or final.get('cycles') != cycles or
             final.get('host_alive') is not True):
         raise ValueError('wrong requested scope or host survival')
-    if text.count('MK_CHILD_READY ') != cycles or text.count('MK_CHILD_PONG') != cycles:
+    if text.count('MK_CHILD_READY ') != cycles or len(re.findall(r'^MK_CHILD_PONG\r?$', text, re.M)) != cycles:
         raise ValueError('actual child execution/roundtrip missing')
     boots = set()
     loaded_images = []
     image_start = None
     panic_windows = []
     for cycle in range(1, cycles + 1):
-        child, stopped = records[2 * cycle - 1][1], records[2 * cycle][1]
+        index = 1 + len(phases) * (cycle - 1)
+        child, stopped = records[index][1], records[index + len(phases) - 1][1]
+        if mode == 'writer-stress':
+            stress = records[index + 1][1]
+            if (stress.get('cycle') != cycle or
+                    any(stress.get(field) != 64 for field in
+                        ('unload_rejections', 'console_roundtrips', 'console_closes', 'closing_sends')) or
+                    stress.get('incoming_workers_exercised') is not False):
+                raise ValueError('incomplete or overstated native writer scope')
+            windows = stress.get('worker_windows')
+            if (not isinstance(windows, list) or len(windows) != 2 or
+                    any(not isinstance(window, list) or len(window) != 2 or
+                        any(type(value) is not int for value in window) or
+                        not 0 < window[0] < window[1] for window in windows) or
+                    max(window[0] for window in windows) >= min(window[1] for window in windows)):
+                raise ValueError('native worker intervals did not overlap')
+            tokens = re.findall(r'^MK_CHILD_PONG token=round-(\d+)\r?$', text, re.M)
+            if tokens != [str(value) for value in range(64)]:
+                raise ValueError('missing, duplicated or reordered live console roundtrip')
         if (child.get('cycle') != cycle or stopped.get('cycle') != cycle or
                 child.get('assigned') != begin['harts'] or stopped.get('harts') != begin['harts'] or
                 child.get('ring_roundtrip') is not True or child.get('active_unload_rejected') is not True or
@@ -66,7 +87,7 @@ def verify(text, exit_status, mode, harts, cycles, images='same'):
             if not any(re.search(r'mk_hsm_status:.*\bhart=' + str(hart) + r' state=1\b', line)
                        for line in evidence):
                 raise ValueError('no raw STOPPED observation for assigned hart')
-        start, end = matches[2 * cycle - 1].end(), matches[2 * cycle].start()
+        start, end = matches[index].end(), matches[index + len(phases) - 1].start()
         interval = text[start:end]
         if mode == 'panic':
             action = interval.find('MK_CHILD_ACTION mode=panic')

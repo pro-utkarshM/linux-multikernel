@@ -15,6 +15,7 @@ import sys
 import time
 import traceback
 import tempfile
+import threading
 from contextlib import contextmanager
 
 BASE = Path('/sys/fs/multikernel')
@@ -72,6 +73,61 @@ def require_errno(operation, expected):
         assert error.errno == expected, repr(error)
         return error.errno
     raise AssertionError('operation unexpectedly succeeded')
+
+
+def writer_stress(unload):
+    """Real guest syscalls and live child replies; no kernel scheduling proof."""
+    barrier = threading.Barrier(2, timeout=10)
+    windows = [None, None]
+    errors = []
+    counts = [0, 0]
+
+    def worker(index):
+        start = time.monotonic_ns()
+        try:
+            for iteration in range(64):
+                barrier.wait()
+                if index == 0:
+                    require_errno(unload, errno.EBUSY)
+                else:
+                    console = connect_console(1)
+                    try:
+                        token = ('round-%d' % iteration).encode()
+                        command = b'ping:' + token + b'\n'
+                        assert os.write(console, command) == len(command)
+                        received = bytearray()
+                        deadline = time.monotonic() + 5
+                        pattern = rb'MK_CHILD_PONG token=' + token + rb'\r?\n'
+                        while not re.search(pattern, received):
+                            assert time.monotonic() < deadline, 'stress roundtrip timed out'
+                            drain_console(console, received, 0.1)
+                        # Deliberately release with another response potentially
+                        # in flight. The next iteration does not rely on it.
+                        closing = ('ping:close-%d\n' % iteration).encode()
+                        assert os.write(console, closing) == len(closing)
+                    finally:
+                        os.close(console)
+                counts[index] += 1
+                barrier.wait()
+        except Exception as error:
+            errors.append(repr(error))
+            barrier.abort()
+        finally:
+            windows[index] = [start, time.monotonic_ns()]
+
+    threads = [threading.Thread(target=worker, args=(index,), daemon=True) for index in range(2)]
+    for thread in threads:
+        thread.start()
+    deadline = time.monotonic() + 180
+    for thread in threads:
+        thread.join(max(0, deadline - time.monotonic()))
+    assert not any(thread.is_alive() for thread in threads), 'native worker did not drain'
+    assert not errors, errors
+    assert counts == [64, 64], counts
+    assert max(window[0] for window in windows) < min(window[1] for window in windows)
+    return dict(unload_rejections=counts[0], console_roundtrips=counts[1],
+                console_closes=counts[1], closing_sends=counts[1], worker_windows=windows,
+                incoming_workers_exercised=False)
 
 
 def register_probe(trace_dir, command):
@@ -142,7 +198,7 @@ def main():
     fault = int(options.get('mk_lifecycle_fault', '0'))
     assert mode in ('graceful', 'halt', 'poweroff', 'reboot', 'panic',
                     'deny-primary', 'partial-start', 'stuck-stop', 'loader-negative',
-                    'failed-retain', 'lost-ack')
+                    'failed-retain', 'lost-ack', 'writer-stress')
     assert harts in (1, 2) and 1 <= cycles <= 50
     assert images in ('same', 'alternate') and (images == 'same' or cycles >= 2)
     if mode in ('deny-primary', 'partial-start', 'stuck-stop'):
@@ -153,6 +209,8 @@ def main():
     if mode in ('failed-retain', 'lost-ack'):
         assert harts == 2 and cycles == 1 and images == 'same'
         assert fault in ((8,) if mode == 'failed-retain' else (0, 7))
+    if mode == 'writer-stress':
+        assert harts == 2 and cycles == 1 and images == 'same' and fault == 0
     mount('sysfs', '/sys', 'sysfs')
     mount('devtmpfs', '/dev', 'devtmpfs')
     # Preserve all host printk records, but do not interleave them with JSON.
@@ -386,6 +444,17 @@ def main():
                    image_sha=image_sha, image_start=placement, active_unload_rejected=True)
             if mode == 'loader-negative':
                 marker('LOADER_RECOVERED', tracer_exercised=True)
+            if mode == 'writer-stress':
+                # The original connection would receive replies before new
+                # connections, masking the release/receive exercise.
+                os.close(fd)
+                fd = None
+                result = writer_stress(lambda: kexec_file_unload(
+                    KEXEC_MULTIKERNEL | KEXEC_MK_ID(1) | KEXEC_FILE_UNLOAD))
+                assert status() == 'active'
+                assert (BASE / 'instances/lifecycle-test/device_tree').read_bytes() == ownership
+                marker('STRESS', cycle=cycle, **result)
+                fd = connect_console(1)
             if mode == 'lost-ack':
                 positive_trace = trace.read_text()
                 before = snapshot('active')
@@ -421,7 +490,7 @@ def main():
                 marker('RECOVERED', boot=recovered[4].decode(), host_alive=True,
                        trace=trace.read_text().splitlines())
             trace.write_text('\n')
-            if mode in ('graceful', 'partial-start', 'stuck-stop', 'loader-negative', 'lost-ack'):
+            if mode in ('graceful', 'partial-start', 'stuck-stop', 'loader-negative', 'lost-ack', 'writer-stress'):
                 if mode == 'stuck-stop':
                     require_errno(lambda: halt_multikernel(1), errno.EBUSY)
                     assert status() == 'active'
