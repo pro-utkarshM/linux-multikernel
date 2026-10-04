@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 """Bounded extension of the pinned #35/Kerf guest, not a standalone harness."""
 import ctypes
+import errno
 import hashlib
 import json
 import os
@@ -61,6 +62,15 @@ def drain_console(fd, received, timeout=0):
         timeout = 0
 
 
+def require_errno(operation, expected):
+    try:
+        operation()
+    except OSError as error:
+        assert error.errno == expected, repr(error)
+        return error.errno
+    raise AssertionError('operation unexpectedly succeeded')
+
+
 def main():
     mount('proc', '/proc', 'proc')
     args = Path('/proc/cmdline').read_text().split()
@@ -70,9 +80,14 @@ def main():
     harts = int(options.get('mk_lifecycle_harts', '1'))
     cycles = int(options.get('mk_lifecycle_cycles', '1'))
     images = options.get('mk_lifecycle_images', 'same')
-    assert mode in ('graceful', 'halt', 'poweroff', 'reboot', 'panic')
+    fault = int(options.get('mk_lifecycle_fault', '0'))
+    assert mode in ('graceful', 'halt', 'poweroff', 'reboot', 'panic',
+                    'deny-primary', 'partial-start', 'stuck-stop')
     assert harts in (1, 2) and 1 <= cycles <= 50
     assert images in ('same', 'alternate') and (images == 'same' or cycles >= 2)
+    if mode in ('deny-primary', 'partial-start', 'stuck-stop'):
+        assert harts == 2 and cycles == 1 and images == 'same'
+        assert fault in {'deny-primary': (1, 2, 3, 4), 'partial-start': (5,), 'stuck-stop': (7,)}[mode]
     mount('sysfs', '/sys', 'sysfs')
     mount('devtmpfs', '/dev', 'devtmpfs')
     # Preserve all host printk records, but do not interleave them with JSON.
@@ -84,6 +99,11 @@ def main():
     (trace_dir / 'kprobe_events').write_text(
         'r:mk_hsm_status sbi_hsm_hart_get_status hart=$arg1:u64 state=$retval:s32\n')
     (trace_dir / 'events/kprobes/mk_hsm_status/enable').write_text('1\n')
+    if mode == 'stuck-stop':
+        with (trace_dir / 'kprobe_events').open('a') as events:
+            events.write('p:mk_copy kimage_load_segment\np:mk_start sbi_hsm_hart_start\n')
+        for event in ('mk_copy', 'mk_start'):
+            (trace_dir / ('events/kprobes/' + event + '/enable')).write_text('1\n')
     trace = trace_dir / 'trace'
     sys.path.insert(0, '/usr/lib/python3/dist-packages')
     from kerf.topology import logical_to_apic
@@ -91,6 +111,7 @@ def main():
     from kerf.kill.main import halt_multikernel
     from kerf.load.main import kexec_file_load, KEXEC_MULTIKERNEL, KEXEC_MK_ID
     from kerf.unload.main import kexec_file_unload, KEXEC_FILE_UNLOAD
+    from kerf.runtime import DeviceTreeManager
 
     def cli(*argv):
         subprocess.run(['/usr/bin/python3', '-B', '-m', 'kerf.cli', *argv], check=True, timeout=60)
@@ -101,7 +122,7 @@ def main():
     ids = [logical_to_apic()[i] for i in range(1, harts + 1)]
     assert Path('/sys/devices/system/cpu/online').read_text().strip() == '0-3'
     host_boot = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
-    marker('BEGIN', mode=mode, harts=ids, cycles=cycles, host_boot=host_boot, images=images)
+    marker('BEGIN', mode=mode, harts=ids, cycles=cycles, host_boot=host_boot, images=images, fault=fault)
     cli('init', '--cpus=' + ','.join(map(str, ids)), '--memory=512MB', '--devices=none')
     cli('create', 'lifecycle-test', '--id=1', '--cpus=' + ','.join(map(str, ids)), '--memory=256MB')
     seen_boots = set()
@@ -135,23 +156,73 @@ def main():
             raise AssertionError('child marker timed out')
 
         try:
+            if mode == 'deny-primary':
+                trace.write_text('\n')
+                result = require_errno(lambda: boot_multikernel(1), errno.EINVAL if fault == 2 else errno.EPERM)
+                assert status() == 'failed'
+                assert (BASE / 'instances/lifecycle-test/id').read_text().strip() == '1'
+                kexec_file_unload(KEXEC_MULTIKERNEL | KEXEC_MK_ID(1) | KEXEC_FILE_UNLOAD)
+                assert status() == 'ready'
+                evidence = trace.read_text()
+                for hart in ids:
+                    assert re.search(r'hart=' + str(hart) + r' state=1\b', evidence)
+                assert Path('/proc/sys/kernel/random/boot_id').read_text().strip() == host_boot
+                assert Path('/proc/sys/kernel/tainted').read_text().strip() == '0'
+                marker('REJECTED', error=result, harts=ids, host_alive=True, cleanup='ready',
+                       hsm_trace=[line for line in evidence.splitlines() if 'mk_hsm_status:' in line])
+                continue
             boot_multikernel(1)
             ready = read_until(rb'MK_CHILD_READY online=(\S+) present=(\S+) possible=(\S+) boot=(\S+) release=(\S+)\r?\n')
             mappings = {int(a): int(b, 16) for a, b in re.findall(rb'MK_CHILD_CPU logical=(\d+) reg=([0-9a-f]+)', received)}
             online = cpu_set(ready[1].decode())
             present = cpu_set(ready[2].decode())
-            assert online == present and {mappings[cpu] for cpu in present} == set(ids)
+            assert {mappings[cpu] for cpu in present} == set(ids)
+            if mode == 'partial-start':
+                assert len(online) == 1 and online < present
+            else:
+                assert online == present
             assert len(cpu_set(ready[3].decode())) == 4
             assert ready[4] not in seen_boots
             assert ready[5].decode() == expected_release
             seen_boots.add(ready[4])
             os.write(fd, b'ping\n')
             read_until(rb'MK_CHILD_PONG\r?\n')
+            ownership = (BASE / 'instances/lifecycle-test/device_tree').read_bytes()
+            require_errno(lambda: kexec_file_unload(KEXEC_MULTIKERNEL | KEXEC_MK_ID(1) | KEXEC_FILE_UNLOAD), errno.EBUSY)
+            assert status() == 'active'
+            assert (BASE / 'instances/lifecycle-test/device_tree').read_bytes() == ownership
             marker('CHILD', cycle=cycle, boot=ready[4].decode(), assigned=ids,
                    online=sorted(online), ring_roundtrip=True, release=ready[5].decode(),
-                   image_sha=image_sha, image_start=placement)
+                   image_sha=image_sha, image_start=placement, active_unload_rejected=True)
             trace.write_text('\n')
-            if mode == 'graceful':
+            if mode in ('graceful', 'partial-start', 'stuck-stop'):
+                if mode == 'stuck-stop':
+                    require_errno(lambda: halt_multikernel(1), errno.EBUSY)
+                    assert status() == 'failed'
+                    root_before = (BASE / 'device_tree').read_bytes()
+                    instance_before = (BASE / 'instances/lifecycle-test/device_tree').read_bytes()
+                    removal = DeviceTreeManager().overlay_gen.generate_removal_overlay('lifecycle-test')
+                    results = {}
+                    operations = {
+                        'exec': lambda: boot_multikernel(1),
+                        'unload': lambda: kexec_file_unload(KEXEC_MULTIKERNEL | KEXEC_MK_ID(1) | KEXEC_FILE_UNLOAD),
+                        'destroy': lambda: (BASE / 'overlays/new').write_bytes(removal),
+                    }
+                    for name, operation in operations.items():
+                        trace.write_text('\n')
+                        results[name] = require_errno(operation, errno.EBUSY)
+                        evidence = trace.read_text()
+                        assert 'mk_copy:' not in evidence and 'mk_start:' not in evidence
+                        assert status() == 'failed'
+                        assert (BASE / 'device_tree').read_bytes() == root_before
+                        assert (BASE / 'instances/lifecycle-test/device_tree').read_bytes() == instance_before
+                    assert Path('/proc/sys/kernel/random/boot_id').read_text().strip() == host_boot
+                    assert Path('/proc/sys/kernel/tainted').read_text().strip() == '0'
+                    marker('RETAINED', rejected=results, harts=ids, host_alive=True,
+                           state='failed', no_copy_or_start=True, ownership_unchanged=True)
+                    marker('PASS', mode=mode, cycles=1, host_alive=True, retained_until_vm_shutdown=True)
+                    subprocess.run(['/bin/busybox', 'dmesg'], check=True)
+                    return
                 halt_multikernel(1)
             else:
                 os.write(fd, (mode + '\n').encode())

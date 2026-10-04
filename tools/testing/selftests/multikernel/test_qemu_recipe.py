@@ -1,6 +1,7 @@
 # SPDX-License-Identifier: GPL-2.0-only
 """Recipe boundaries only: these are not guest or ring-transport proof."""
 import importlib.util
+import errno
 from pathlib import Path
 import unittest
 from unittest.mock import patch
@@ -11,6 +12,15 @@ spec.loader.exec_module(recipe)
 
 
 class Recipe(unittest.TestCase):
+    def test_expected_kernel_errno_not_any_failure(self):
+        def rejected():
+            raise OSError(errno.EBUSY, 'busy')
+        self.assertEqual(recipe.require_errno(rejected, errno.EBUSY), errno.EBUSY)
+        with self.assertRaises(AssertionError):
+            recipe.require_errno(rejected, errno.EPERM)
+        with self.assertRaises(AssertionError):
+            recipe.require_errno(lambda: None, errno.EBUSY)
+
     def test_console_selection_precedes_child_execution(self):
         with patch.object(recipe.os, 'open', return_value=7) as opened, \
                 patch.object(recipe.os, 'write', return_value=2) as written:

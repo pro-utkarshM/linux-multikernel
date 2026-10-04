@@ -15,7 +15,7 @@ host payload is named /payload/vmlinux but contains the raw RISC-V Image.
 Use the merged-/usr RISC-V runtime with Python, libfdt, Kerf and static BusyBox.
 
 Run bash qemu_lifecycle_test.sh KERNEL_BUILD HARNESS KERF_SOURCE RISCV_RUNTIME
-FIRMWARE OUTPUT_PARENT MODE HARTS CYCLES [ALTERNATE_BUILD]. OUTPUT_PARENT must end in /build;
+FIRMWARE OUTPUT_PARENT MODE HARTS CYCLES [ALTERNATE_BUILD] [FAULT_MODE]. OUTPUT_PARENT must end in /build;
 every invocation creates a fresh bundle and preserves failures. It verifies
 dependency pins, source cleanliness and exact Kerf runtime contents, reuses
 the unchanged pinned packing helper, freezes inputs and verifies raw logs.
@@ -68,6 +68,16 @@ indexed directly. opensbi_fault_test.sh checks selectors at modeled boundaries.
 Mode 6 uses the normal graceful/two-hart/one-cycle recipe and must additionally
 pass verify_pending.py SERIAL_LOG EXIT_STATUS. It requires an injection marker
 and a pending-to-stopped trace for each assigned hart; normal success without
-fault injection is not accepted. Native denial/partial/stuck-state guest
-recipes and lost-ACK testing are still pending. Do not count selector unit
-checks or a firmware build as a native fault test.
+fault injection is not accepted. Native denial/partial/stuck-state recipes use
+MODE=deny-primary|partial-start|stuck-stop, HARTS=2, CYCLES=1, an empty alternate
+build argument and FAULT_MODE=1..4|5|7 respectively. The frozen fault verifier
+requires firmware injection markers, exact errno and confirmed cleanup for
+denied starts; reduced online membership and every hart stopped after partial
+start; and blocked exec/unload/kernel deletion with retained ownership for a
+permanently pending report. Deletion writes an actual removal overlay through
+current Kerf, not a userspace status veto or an unsupported instance rmdir.
+No public bulk-unload syscall exists on this source; its generic free guard
+requires separate test-only native instrumentation, not invented ID-zero ABI.
+All executing cases also reject an active Image unload before termination.
+Lost-ACK testing remains pending. Do not count selector unit checks or a
+firmware build as a native fault test.

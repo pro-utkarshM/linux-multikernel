@@ -15,7 +15,9 @@ cycles=${9:-1}
 alternate_build=${10:-}
 images=same
 test -z "$alternate_build" || images=alternate
-case "$mode" in graceful|halt|poweroff|reboot|panic) ;; *) exit 2 ;; esac
+fault=${11:-0}
+case "$mode" in graceful|halt|poweroff|reboot|panic|deny-primary|partial-start|stuck-stop) ;; *) exit 2 ;; esac
+[[ "$fault" =~ ^[0-7]$ ]] || exit 2
 case "$harts" in 1|2) ;; *) exit 2 ;; esac
 [[ "$cycles" =~ ^[1-9][0-9]?$ ]] && (( cycles <= 50 )) || exit 2
 test "$(git -C "$harness" rev-parse HEAD)" = 48507f176520b11a655344510b1b865b037e527f
@@ -40,6 +42,7 @@ install -m 0644 "$firmware" "$bundle/fw_dynamic.bin"
 install -m 0755 "$test_dir/qemu-host-init.py" "$bundle/guest-host.py"
 install -m 0755 "$test_dir/qemu-child-init" "$bundle/guest-child"
 install -m 0644 "$test_dir/verify_lifecycle.py" "$bundle/verify_lifecycle.py"
+install -m 0644 "$test_dir/verify_fault.py" "$bundle/verify_fault.py"
 printf '%s\n' "$revision" > "$bundle/kernel-revision.txt"
 # Avoid merging /bin symlinks over the original harness's BusyBox directory.
 mkdir "$bundle/runtime-view"
@@ -69,7 +72,7 @@ bash "$harness/scripts/build-initramfs.sh" host "$bundle/host-initrd.cpio.gz" \
 (
     cd "$bundle"
     sha256sum Image vmlinux.unstripped kernel.config fw_dynamic.bin guest-host.py guest-child \
-        host-initrd.cpio.gz secondary-initrd.cpio.gz verify_lifecycle.py \
+        host-initrd.cpio.gz secondary-initrd.cpio.gz verify_lifecycle.py verify_fault.py \
         qemu-version.txt clang-version.txt harness-revision.txt kerf-revision.txt > SHA256SUMS
     if test -n "$alternate_build"; then
         sha256sum Image-alt vmlinux-alt.unstripped >> SHA256SUMS
@@ -78,11 +81,15 @@ bash "$harness/scripts/build-initramfs.sh" host "$bundle/host-initrd.cpio.gz" \
 command=(qemu-system-riscv64 -machine virt -cpu rv64 -smp 4 -m 2048 -nographic \
     -monitor none -nic none -no-reboot -bios "$bundle/fw_dynamic.bin" \
     -kernel "$bundle/Image" -initrd "$bundle/host-initrd.cpio.gz" \
-    -append "console=ttyS0,115200 rdinit=/init panic=0 kernelcore=1G log_buf_len=4M mk_lifecycle_guard=modern-v5 mk_lifecycle_mode=$mode mk_lifecycle_harts=$harts mk_lifecycle_cycles=$cycles mk_lifecycle_images=$images")
+    -append "console=ttyS0,115200 rdinit=/init panic=0 kernelcore=1G log_buf_len=4M mk_lifecycle_guard=modern-v5 mk_lifecycle_mode=$mode mk_lifecycle_harts=$harts mk_lifecycle_cycles=$cycles mk_lifecycle_images=$images mk_lifecycle_fault=$fault")
 printf '%q ' "${command[@]}" > "$bundle/command.txt"
 printf '\n' >> "$bundle/command.txt"
 rc=0
 timeout --kill-after=5s "$((300 + cycles * 60))s" "${command[@]}" > "$bundle/serial.log" 2>&1 || rc=$?
 printf '%s\n' "$rc" > "$bundle/exit-status.txt"
 tail -30 "$bundle/serial.log"
-python3 "$bundle/verify_lifecycle.py" "$bundle/serial.log" "$rc" "$mode" "$harts" "$cycles" "$images"
+case "$mode" in
+    deny-primary|partial-start|stuck-stop)
+        python3 "$bundle/verify_fault.py" "$bundle/serial.log" "$rc" "$mode" "$fault" ;;
+    *) python3 "$bundle/verify_lifecycle.py" "$bundle/serial.log" "$rc" "$mode" "$harts" "$cycles" "$images" ;;
+esac
