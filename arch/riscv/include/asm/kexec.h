@@ -41,6 +41,9 @@ crash_setup_regs(struct pt_regs *newregs,
 struct kimage_arch {
 	void *fdt; /* For CONFIG_KEXEC_FILE */
 	unsigned long fdt_addr;
+	/* Multikernel initrd metadata survives file-loader buffer cleanup. */
+	unsigned long initrd_start;
+	unsigned long initrd_size;
 };
 
 extern const unsigned char riscv_kexec_relocate[];

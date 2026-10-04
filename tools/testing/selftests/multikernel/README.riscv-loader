@@ -1,0 +1,40 @@
+.. SPDX-License-Identifier: GPL-2.0-only
+
+RISC-V multikernel Image loader development checks
+=================================================
+
+Run riscv_image_test.sh, riscv_extra_test.sh, riscv_prepare_test.sh and
+riscv_elf_test.sh from this source tree. CC/CFLAGS/TMPDIR may be overridden.
+These compile actual loader functions against controlled allocator, FDT, page
+and ELF boundaries. They are not grant allocator, hardware or firmware proof.
+
+Observed RED before implementation: Image 14 checks/8 failures; extra loader
+11/5; MK prepare rejected missing load-time FDT; ELF allocated instead of refusing
+MK. Final plain, optimized and sanitizer runs must be recorded with this revision.
+Checks cover Image length, PMD rounding overflow, rv64 text/alignment policy,
+physical entry, allocation failures, no purgatory or host-DTB cloning, retained
+initrd extent, prepare bypass and rejection of ELF before any MK allocation.
+Ordinary/crash Image policy, ordinary FDT/purgatory and ordinary ELF remain
+characterized, not full ordinary kexec runtime qualification.
+
+Image and initrd segments use generic instance-pool allocation and rollback.
+Image size is rounded to 2 MiB to avoid strict-RWX PMD protection overlapping
+another allocation. No relocation control code is prepared for MK. Execution
+uses generic multikernel_kexec_by_id -> mk_arch_spawn_instance, not machine_kexec.
+Shared generic guards forbid unsafe active unload, confirm stopped CPUs before
+execution copies, preserve pristine segment sources and stop on manifest errors.
+
+Modern #27 dependency: at execution the boot tree is the instance's 256KB
+persistent manifest. Its host allocation is OUTSIDE the Image memory grant,
+unlike the original issue's older load-time DTB-in-grant description. Do not
+make a second host-FDT clone to satisfy that obsolete placement mechanically.
+The architecture boot-tree series must set image->arch.fdt_addr to manifest_phys,
+emit assigned hart/intc nodes, bootargs and the recorded initrd start/size, reserve
+the manifest/rings/control, and regenerate /memory from live grant ownership.
+Loader completion alone does not boot or qualify a spawn without this dependency.
+
+No claim for arbitrary non-MK child Images: matched-revision CONFIG_MULTIKERNEL
+kernels and the supported configuration variants must be qualified. A raw Image
+header cannot prove that reset-containment support is built into the child.
+Runtime gates: actual grant exhaustion/misalignment, failed-load cleanup, initial
+and partial HSM starts, termination, safe reclaim and same/different-Image cycles.

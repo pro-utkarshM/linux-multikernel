@@ -117,6 +117,10 @@ static void *elf_kexec_load(struct kimage *image, char *kernel_buf,
 	struct elfhdr ehdr;
 	struct kexec_elf_info elf_info;
 
+	/* Multikernel's direct HSM path currently accepts only RISC-V Image. */
+	if (image->type == KEXEC_TYPE_MULTIKERNEL)
+		return ERR_PTR(-EOPNOTSUPP);
+
 	ret = kexec_build_elf_info(kernel_buf, kernel_len, &ehdr, &elf_info);
 	if (ret)
 		return ERR_PTR(ret);
