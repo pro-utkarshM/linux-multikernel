@@ -197,8 +197,8 @@ def main():
         def dmesg():
             return subprocess.check_output(['/bin/busybox', 'dmesg']).decode()
 
-        def snapshot(state):
-            rows = resources(dmesg(), state)
+        def snapshot(state, require_ctrl=True):
+            rows = resources(dmesg(), state, require_ctrl=require_ctrl)
             assert rows, 'no published allocation snapshot: ' + state
             return rows[-1]
 
@@ -207,7 +207,8 @@ def main():
             kexec_file_load(kernel.fileno(), initrd.fileno(),
                             'rdinit=/init console=mktty0 panic=1 mk_lifecycle_child=1',
                             KEXEC_MULTIKERNEL | KEXEC_MK_ID(1))
-        control_resources = snapshot('loaded')
+        # The control block is lazy: manifest finalization allocates it at exec.
+        control_resources = snapshot('loaded', require_ctrl=False)
         control_start = len(dmesg())
         kexec_file_unload(KEXEC_MULTIKERNEL | KEXEC_MK_ID(1) | KEXEC_FILE_UNLOAD)
         assert status() == 'ready'

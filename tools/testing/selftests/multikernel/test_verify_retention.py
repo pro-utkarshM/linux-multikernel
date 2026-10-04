@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: GPL-2.0-only
 import importlib
+import json
 import unittest
 from test_verify_lifecycle import event
 
@@ -72,6 +73,18 @@ class Retention(unittest.TestCase):
     def test_reachable_failed_state_and_lost_ack_retention(self):
         for mode, fault in (('failed-retain', 8), ('lost-ack', 7)):
             self.assertEqual(self.verify(retention_log(mode, fault), mode, fault)['result'], 'PASS')
+
+    def test_load_only_control_does_not_require_exec_time_control_block(self):
+        text=retention_log()
+        line=next(line for line in text.splitlines(keepends=True) if line.startswith('MK_LIFECYCLE_CONTROL'))
+        control=json.loads(line.partition(' ')[2])
+        control['resources']['ctrl']=0
+        control['resources']['tracked']=0
+        control['release_log']='\n'.join(row for row in control['release_log'].splitlines()
+                                         if 'phys=d0000000' not in row)+'\n'
+        changed=text.replace(line,event('CONTROL',**control)).replace(
+            '[ 1.0] MK_TEST_FREE id=1 kind=allocation phys=d0000000 size=4096 pool=2000\n','')
+        self.assertEqual(self.verify(changed)['result'],'PASS')
 
     def test_missing_or_wrong_release_control_and_actual_release_rejected(self):
         text=retention_log()

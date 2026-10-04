@@ -9,7 +9,7 @@ import sys
 FIELDS = ('image', 'ctrl', 'manifest', 'ring', 'pool', 'size', 'owned')
 
 
-def resources(text, state=None):
+def resources(text, state=None, require_ctrl=True):
     result=[]
     for line in text.splitlines():
         if 'MK_TEST_RESOURCE id=1 ' not in line:
@@ -22,7 +22,7 @@ def resources(text, state=None):
                  for key in (*FIELDS, 'tracked')}
         except (KeyError, ValueError) as error:
             raise ValueError('malformed resource snapshot') from error
-        if any(row[key] <= 0 for key in FIELDS):
+        if any(row[key] <= 0 for key in FIELDS if key!='ctrl' or require_ctrl):
             continue  # Early READY/retired records have no published Image.
         result.append(row)
     return result
@@ -31,12 +31,15 @@ def resources(text, state=None):
 def release_control(record):
     before=record.get('resources', {})
     log=record.get('release_log', '')
-    if any(not isinstance(before.get(key), int) or before[key] <= 0 for key in FIELDS):
+    if (any(not isinstance(before.get(key), int) or before[key] <= 0 for key in FIELDS if key!='ctrl') or
+        not isinstance(before.get('ctrl'),int) or before['ctrl']<0):
         raise ValueError('missing control allocation identity')
     rows=[dict(re.findall(r'(\w+)=([\w-]+)', line)) for line in log.splitlines()
           if 'MK_TEST_FREE id=1 ' in line]
-    for kind, address in (('ring', before['ring']), ('manifest', before['manifest']),
-                          ('allocation', before['ctrl']), ('pool', 0)):
+    required=[('ring',before['ring']),('manifest',before['manifest']),('pool',0)]
+    if before['ctrl']:
+        required.append(('allocation',before['ctrl']))
+    for kind,address in required:
         if not any(row.get('kind')==kind and int(row.get('phys', '-1'),16)==address and
                    int(row.get('pool', '-1'),16)==before['pool'] for row in rows):
             raise ValueError('release instrumentation not positively exercised')
