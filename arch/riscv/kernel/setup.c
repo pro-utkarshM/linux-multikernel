@@ -24,6 +24,7 @@
 #include <linux/efi.h>
 #include <linux/crash_dump.h>
 #include <linux/panic_notifier.h>
+#include <linux/panic.h>
 #include <linux/jump_label.h>
 #include <linux/gcd.h>
 
@@ -319,8 +320,9 @@ extern void __init init_rt_signal_env(void);
 static int mk_spawn_panic_notify(struct notifier_block *nb, unsigned long event,
 				 void *data)
 {
-	/* A spawn stops locally even when panic=0; never notify or allocate. */
-	machine_halt();
+	/* Nonzero timeouts reach machine_restart(), which stops locally too. */
+	if (!panic_timeout)
+		machine_halt();
 	return NOTIFY_DONE;
 }
 

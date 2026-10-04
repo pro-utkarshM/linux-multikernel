@@ -49,6 +49,7 @@ struct notifier_block {
 };
 static struct notifier_block *registered;
 static int panic_notifier_list;
+static int panic_timeout;
 
 static void parse_dtb(void) { initial_boot_params = &spawn; }
 static void early_ioremap_setup(void) { mapped = true; }
@@ -93,6 +94,11 @@ int main(void)
 	if (!stopped)
 		registered->notifier_call(registered, 0, NULL);
 	assert(stopped == 2);
+	panic_timeout = 1;
+	stopped = setjmp(initialized);
+	if (!stopped)
+		assert(registered->notifier_call(registered, 0, NULL) == NOTIFY_DONE);
+	assert(stopped == 0);
 	puts("PASS: early mapping precedes manifest, spawn panic hook precedes SBI reset setup");
 	return 0;
 }
