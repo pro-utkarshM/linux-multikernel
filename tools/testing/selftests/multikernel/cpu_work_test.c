@@ -17,13 +17,18 @@ typedef u64 mk_phys_cpu_t;
 #define pr_warn(...) do { } while (0)
 #define pr_info(...) do { } while (0)
 #define DEFINE_MUTEX(name) bool name
-#define DEFINE_SPINLOCK(name) bool name
+struct irq_lock { bool held; };
+#define DEFINE_SPINLOCK(name) struct irq_lock name
+#define DEFINE_RAW_SPINLOCK(name) struct irq_lock name
 #define mutex_lock(m) do { assert(!*(m)); *(m) = true; } while (0)
 #define mutex_unlock(m) do { assert(*(m)); *(m) = false; } while (0)
 #define spin_lock_irqsave(m, flags) \
-	do { assert(!*(m)); *(m) = true; (flags) = 0; } while (0)
+	do { lock_irq(m, false); (flags) = 0; } while (0)
 #define spin_unlock_irqrestore(m, flags) \
-	do { assert(*(m)); *(m) = false; (void)(flags); } while (0)
+	do { unlock_irq(m); (void)(flags); } while (0)
+#define raw_spin_lock_irqsave(m, flags) \
+	do { lock_irq(m, true); (flags) = 0; } while (0)
+#define raw_spin_unlock_irqrestore(m, flags) spin_unlock_irqrestore(m, flags)
 
 #include "work-types.h"
 
@@ -33,6 +38,8 @@ static int register_error, close_result;
 static bool online[2];
 static int add_error, remove_error;
 static int send_error;
+static bool hard_irq;
+static unsigned int rt_atomic_lock_errors;
 static mk_phys_cpu_t ids[] = { 65537, 0x123456789abcdef0ULL };
 
 static void expect(const char *name, int got, int want)
@@ -42,6 +49,21 @@ static void expect(const char *name, int got, int want)
 		fprintf(stderr, "FAIL %s: got %d, want %d\n", name, got, want);
 		failures++;
 	}
+}
+
+/* Model PREEMPT_RT: ordinary spin locks can sleep; raw locks cannot. */
+static void lock_irq(struct irq_lock *lock, bool raw)
+{
+	if (hard_irq && !raw)
+		rt_atomic_lock_errors++;
+	assert(!lock->held);
+	lock->held = true;
+}
+
+static void unlock_irq(struct irq_lock *lock)
+{
+	assert(lock->held);
+	lock->held = false;
 }
 
 static void *kmalloc(size_t n, unsigned int flags)
@@ -191,13 +213,30 @@ static int mk_unregister_msg_handler(u32 type,
 	struct mk_cpu_resource_payload payload = { .cpu_id = 65537 };
 
 	/* Model an already-entered callback attempting to queue during cleanup. */
-	if (closing_probe)
+	if (closing_probe) {
+		hard_irq = true;
 		close_result = mk_handle_cpu_add(&payload, sizeof(payload), 99);
+		hard_irq = false;
+	}
 	registered = false;
 	return 0;
 }
 
 #include "work-production.h"
+
+static int receive_cpu(bool add, struct mk_cpu_resource_payload *payload, u32 len, u64 id)
+{
+	int ret;
+
+	hard_irq = true;
+	ret = add ? mk_handle_cpu_add(payload, len, id) : mk_handle_cpu_remove(payload, len, id);
+	hard_irq = false;
+	return ret;
+}
+
+/* Test calls enter the real receive handlers with hard-IPI context modeled. */
+#define mk_handle_cpu_add(p, len, id) receive_cpu(true, p, len, id)
+#define mk_handle_cpu_remove(p, len, id) receive_cpu(false, p, len, id)
 
 static struct workqueue_struct *active_queue(void)
 {
@@ -304,6 +343,7 @@ int main(void)
 	       mk_handle_cpu_remove(&payload, sizeof(payload), 41), -ESHUTDOWN);
 	mk_hotplug_cleanup();
 	reset();
+	expect("hard-IPI admission never takes an RT sleeping lock", rt_atomic_lock_errors, 0);
 	printf("CPU work ordering: %u checks, %u failures\n", checks, failures);
 	return failures ? EXIT_FAILURE : EXIT_SUCCESS;
 }

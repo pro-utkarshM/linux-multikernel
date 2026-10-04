@@ -15,6 +15,12 @@ and transport boundaries. A legal adverse scheduler runs unordered requests
 newest-first; the ordered-queue boundary follows the kernel's FIFO contract.
 This is not a real Linux workqueue or concurrent hotplug execution test.
 
+The lock boundary also models hard-IPI context with PREEMPT_RT semantics:
+ordinary spin locks may sleep, raw locks may not. Before the review fix, that
+check reported 12 invalid lock acquisitions (44 checks, one failure). It passes
+with raw submission/detachment/publication locks. This models the API choice;
+it is not a reproduced PREEMPT_RT kernel failure or full RT qualification.
+
 Before the source fix: 35 checks, 14 failures, including a remove ACK preceding
 an older queued add and the CPU becoming online afterward. Queue initialization,
 registration failure, sparse full-width CPU IDs, worker errors, allocation
@@ -33,7 +39,7 @@ global ordering guarantee. A remove worker and its ACK follow CPU requests
 already admitted ahead of it. The separate ack_test retains real pending/ID
 and worker echo coverage with its single-item scheduler boundary.
 
-Submission and queue detachment share an IRQ-safe spinlock. Detach closes CPU
+Submission and queue detachment share an IRQ-safe raw spinlock. Detach closes CPU
 admission before unregister; destroy_workqueue drains admitted CPU work before
 freeing the queue. Init failure does not publish a resource handler without its
 CPU queue. Rejected work is freed and returns -ESHUTDOWN to the receive dispatch;

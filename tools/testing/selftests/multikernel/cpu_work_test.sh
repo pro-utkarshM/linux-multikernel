@@ -12,7 +12,7 @@ awk '/^#define MK_MSG_IO / { copy = 1 }
 awk '/^struct mk_hotplug_op \{/ { copy = 1 }
      /^static DEFINE_MUTEX\(mk_hotplug_mutex\);/ { print }
      /^static LIST_HEAD\(mk_hotplug_ops\);/ { print }
-     /^static DEFINE_SPINLOCK\(mk_cpu_hotplug_lock\);/ { print }
+     /^static DEFINE_(RAW_)?SPINLOCK\(mk_cpu_hotplug_lock\);/ { print }
      /^static struct workqueue_struct \*mk_cpu_hotplug_wq;/ { print }
      /^static (int|struct workqueue_struct \*)mk_cpu_hotplug_/ { copy = 1 }
      /^static int mk_queue_cpu_work\(/ { copy = 1 }
