@@ -17,36 +17,54 @@ struct kimage {
 	struct { unsigned long memsz, mem; void *buf; } segment[1];
 	void *control_code_page;
 };
+
 static unsigned int probes, page_reads, executable;
 static const unsigned char riscv_kexec_relocate[16] = { 1 };
 static const unsigned int riscv_kexec_relocate_size = 16;
+
 static int fdt_check_header(const struct fdt_header *h)
 {
 	probes++;
 	return h->magic == 0xd00dfeed ? 0 : -EINVAL;
 }
-static void *page_address(void *page) { page_reads++; return page; }
-static unsigned long page_size(void *page) { return 4096; }
+
+static void *page_address(void *page)
+{
+	page_reads++;
+	return page;
+}
+
+static unsigned long page_size(void *page)
+{
+	return 4096;
+}
+
 static int set_memory_x(unsigned long address, int pages)
 {
 	assert(address && pages == 1);
 	executable++;
 	return 0;
 }
+
 static int copy_from_user(void *to, void *from, unsigned long size)
 {
 	memcpy(to, from, size);
 	return 0;
 }
+
 #include "prepare-production.h"
+
 int main(void)
 {
 	struct kimage image = { .type = KEXEC_TYPE_MULTIKERNEL };
 	struct fdt_header header = { .magic = 0xd00dfeed };
 	unsigned char control[4096] = { 0 };
 	int ret = machine_kexec_prepare(&image);
+
 	if (ret || probes || page_reads || executable) {
-		fprintf(stderr, "FAIL: MK prepare must not require a load-time DTB or relocation page (%d)\n", ret);
+		fprintf(stderr,
+			"FAIL: MK prepare must not require a load-time DTB or relocation page (%d)\n",
+			ret);
 		return 1;
 	}
 	image.type = 0;

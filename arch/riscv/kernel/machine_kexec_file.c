@@ -251,10 +251,8 @@ int arch_kexec_apply_relocations_add(struct purgatory_info *pi,
 	}
 	return 0;
 }
-
-
 static int load_multikernel_segments(struct kimage *image, char *initrd,
-				    unsigned long initrd_len)
+				   unsigned long initrd_len)
 {
 	struct kexec_buf kbuf = {
 		.image = image,

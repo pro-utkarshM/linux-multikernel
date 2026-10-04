@@ -11,21 +11,49 @@ struct kimage { int type; unsigned long start; };
 struct elfhdr { int unused; };
 struct kexec_elf_info { int unused; };
 static int builds, placements, loads, extras, frees;
+
 static int kexec_build_elf_info(char *b, unsigned long n,
-	struct elfhdr *h, struct kexec_elf_info *i) { builds++; return 0; }
+			      struct elfhdr *h, struct kexec_elf_info *i)
+{
+	builds++;
+	return 0;
+}
+
 static int elf_find_pbase(struct kimage *image, unsigned long len,
-	struct elfhdr *h, struct kexec_elf_info *i,
-	unsigned long *old, unsigned long *new) { placements++; return 0; }
+			  struct elfhdr *h, struct kexec_elf_info *i,
+			  unsigned long *old, unsigned long *new)
+{
+	placements++;
+	return 0;
+}
+
 static int riscv_kexec_elf_load(struct kimage *image, struct elfhdr *h,
-	struct kexec_elf_info *i, unsigned long old, unsigned long new) { loads++; return 0; }
+			      struct kexec_elf_info *i,
+			      unsigned long old, unsigned long new)
+{
+	loads++;
+	return 0;
+}
+
 static int load_extra_segments(struct kimage *image, unsigned long base,
-	unsigned long len, char *initrd, unsigned long ilen, char *cmd,
-	unsigned long clen) { extras++; return 0; }
-static void kexec_free_elf_info(struct kexec_elf_info *i) { frees++; }
+			       unsigned long len, char *initrd, unsigned long ilen,
+			       char *cmd, unsigned long clen)
+{
+	extras++;
+	return 0;
+}
+
+static void kexec_free_elf_info(struct kexec_elf_info *i)
+{
+	frees++;
+}
+
 #include "elf-production.h"
+
 int main(void)
 {
 	struct kimage image = { .type = KEXEC_TYPE_MULTIKERNEL };
+
 	if (elf_kexec_load(&image, NULL, 0, NULL, 0, NULL, 0) != ERR_PTR(-EOPNOTSUPP) ||
 	    builds || placements || loads || extras || frees) {
 		fputs("FAIL: MK must reject ELF before parsing or allocating\n", stderr);
