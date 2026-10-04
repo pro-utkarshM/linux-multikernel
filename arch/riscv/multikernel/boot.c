@@ -49,7 +49,7 @@ static int mk_boot_range(void *fdt, const char *kind, u64 start, u64 size,
 	if (!ret)
 		ret = fdt_property(fdt, "reg", reg, sizeof(reg));
 	if (!ret && reserved)
-		ret = fdt_property(fdt, "no-map", NULL, 0);
+		ret = fdt_property(fdt, "no-map", "", 0);
 	return ret ? ret : fdt_end_node(fdt);
 }
 
@@ -102,7 +102,7 @@ static int mk_boot_cpu(void *fdt, unsigned int cpu)
 	if (!ret)
 		ret = fdt_property_u32(fdt, "#interrupt-cells", 1);
 	if (!ret)
-		ret = fdt_property(fdt, "interrupt-controller", NULL, 0);
+		ret = fdt_property(fdt, "interrupt-controller", "", 0);
 	if (!ret)
 		ret = fdt_property_string(fdt, "compatible", "riscv,cpu-intc");
 	if (!ret)
@@ -169,7 +169,7 @@ int mk_arch_boot_nodes(void *fdt, struct mk_instance *instance)
 	if (!ret)
 		ret = fdt_property_u32(fdt, "#size-cells", 2);
 	if (!ret)
-		ret = fdt_property(fdt, "ranges", NULL, 0);
+		ret = fdt_property(fdt, "ranges", "", 0);
 	if (!ret)
 		ret = mk_boot_range(fdt, "control", instance->ctrl_phys,
 				    MK_CTRL_BLOCK_SIZE, true);
