@@ -37,6 +37,10 @@ machine_kexec_prepare(struct kimage *image)
 	unsigned int control_code_buffer_sz = 0;
 	int i = 0;
 
+	/* Multikernel builds its manifest at execution and starts through HSM. */
+	if (image->type == KEXEC_TYPE_MULTIKERNEL)
+		return 0;
+
 	/* Find the Flattened Device Tree and save its physical address */
 	for (i = 0; i < image->nr_segments; i++) {
 		if (image->segment[i].memsz <= sizeof(fdt))
