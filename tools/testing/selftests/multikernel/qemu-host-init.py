@@ -251,7 +251,7 @@ def main():
                 assert (BASE / 'device_tree').read_bytes() == root_before
                 assert (BASE / 'instances/lifecycle-test/device_tree').read_bytes() == instance_before
             after = snapshot(state)
-            for key in ('image', 'ctrl', 'manifest', 'ring', 'pool', 'size', 'owned'):
+            for key in ('image', 'ctrl', 'manifest', 'ring', 'pool', 'size', 'owned', 'ring_size', 'manifest_size'):
                 assert before[key] == after[key], (key, before, after)
             assert after['tracked'] == 2
             # Do not rely on a console-held instance reference for retention.

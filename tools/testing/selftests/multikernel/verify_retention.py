@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 import sys
 
-FIELDS = ('image', 'ctrl', 'manifest', 'ring', 'pool', 'size', 'owned')
+FIELDS = ('image', 'ctrl', 'manifest', 'ring', 'pool', 'size', 'owned', 'ring_size', 'manifest_size')
 
 
 def resources(text, state=None, require_ctrl=True):
@@ -36,13 +36,23 @@ def release_control(record):
         raise ValueError('missing control allocation identity')
     rows=[dict(re.findall(r'(\w+)=([\w-]+)', line)) for line in log.splitlines()
           if 'MK_TEST_FREE id=1 ' in line]
-    required=[('ring',before['ring']),('manifest',before['manifest']),('pool',0)]
+    identities=[(row.get('kind'),row.get('phys'),row.get('pool')) for row in rows]
+    if len(set(identities))!=len(identities) or any(row.get('kind') not in
+            ('allocation','ring','manifest','pool') for row in rows):
+        raise ValueError('duplicate or unknown release identity')
+    required=[('ring',before['ring'],before['ring_size']),
+              ('manifest',before['manifest'],before['manifest_size']),('pool',0,before['size'])]
     if before['ctrl']:
-        required.append(('allocation',before['ctrl']))
-    for kind,address in required:
-        if not any(row.get('kind')==kind and int(row.get('phys', '-1'),16)==address and
-                   int(row.get('pool', '-1'),16)==before['pool'] for row in rows):
+        required.append(('allocation',before['ctrl'],None))
+    for kind,address,size in required:
+        matches=[row for row in rows if row.get('kind')==kind and int(row.get('phys','-1'),16)==address and
+                 (size is None or int(row.get('size','-1'))==size) and
+                 (kind in ('ring','manifest') or int(row.get('pool','-1'),16)==before['pool'])]
+        if len(matches)!=1 or (kind!='allocation' and sum(row.get('kind')==kind for row in rows)!=1):
             raise ValueError('release instrumentation not positively exercised')
+    if any(row.get('kind')=='allocation' and (int(row.get('pool','-1'),16)!=before['pool'] or
+            int(row.get('size','-1'))<=0 or int(row.get('phys','-1'),16)<=0) for row in rows):
+        raise ValueError('uncorrelated allocation release')
     if not any(row.get('kind')=='allocation' and int(row.get('phys', '-1'),16)!=before['ctrl']
                for row in rows):
         raise ValueError('Image release marker not exercised')
@@ -56,6 +66,11 @@ def verify_retention(text, exit_status, mode, fault):
         raise ValueError('unexpected guest diagnostic')
     if not re.search(r'^OpenSBI v',text,re.MULTILINE):
         raise ValueError('missing firmware identity')
+    raw='\n'.join(line for line in text.splitlines() if not line.startswith('MK_LIFECYCLE_'))
+    expected_markers={'failed-retain':{'REJECT','PENDING'},'lost-ack':{'PENDING'} if fault==7 else set()}[mode]
+    for kind,selector,hart in re.findall(r'MK_FW_(REJECT|PENDING) mode=(\d+) hart=(\d+)',raw):
+        if kind not in expected_markers or int(selector)!=fault:
+            raise ValueError('contradictory firmware injection evidence')
     records=[(m[1],json.loads(m[2])) for m in re.finditer(r'^MK_LIFECYCLE_(\w+) ([^\n]*)$',text,re.MULTILINE)]
     expected=(['BEGIN','CONTROL','REJECTED','RETAINED','PASS'] if mode=='failed-retain' else
               ['BEGIN','CONTROL','CHILD','TIMEOUT','RETAINED','PASS'] if fault==7 else
@@ -65,6 +80,8 @@ def verify_retention(text, exit_status, mode, fault):
     data=dict(records)
     begin, final=data['BEGIN'],data['PASS']
     harts=begin.get('harts',[])
+    if any(int(hart) not in harts for _,_,hart in re.findall(r'MK_FW_(REJECT|PENDING) mode=(\d+) hart=(\d+)',raw)):
+        raise ValueError('firmware injection targets unowned hart')
     if (len(harts)!=2 or len(set(harts))!=2 or begin.get('mode')!=mode or
         begin.get('fault')!=fault or begin.get('cycles')!=1 or begin.get('images')!='same' or
         final.get('mode')!=mode or final.get('cycles')!=1 or final.get('host_alive') is not True):

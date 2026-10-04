@@ -11,7 +11,7 @@ static void mk_test_snapshot(struct mk_instance *instance, const char *phase)
 	if (!mk_test_resource_target(instance))
 		return;
 	lockdep_assert_held(&mk_overlay_mutex);
-	pr_info("MK_TEST_RESOURCE id=%d phase=%s state=%s image=%llx ctrl=%llx manifest=%llx ring=%llx pool=%llx size=%zu owned=%u tracked=%u\n",
+	pr_info("MK_TEST_RESOURCE id=%d phase=%s state=%s image=%llx ctrl=%llx manifest=%llx ring=%llx pool=%llx size=%zu owned=%u tracked=%u ring_size=%u manifest_size=%lu\n",
 		instance->id, phase, mk_state_to_string(instance->state),
 		(unsigned long long)(unsigned long)instance->kimage,
 		(unsigned long long)instance->ctrl_phys,
@@ -20,7 +20,8 @@ static void mk_test_snapshot(struct mk_instance *instance, const char *phase)
 		(unsigned long long)(unsigned long)instance->instance_pool,
 		instance->pool_size,
 		instance->cpus ? mk_cpu_set_count(instance->cpus) : 0,
-		instance->cpus_on_slot ? mk_cpu_set_count(instance->cpus_on_slot) : 0);
+		instance->cpus_on_slot ? mk_cpu_set_count(instance->cpus_on_slot) : 0,
+		instance->ipi_pages << PAGE_SHIFT, (unsigned long)MK_MANIFEST_SIZE);
 }
 static void mk_test_free(struct mk_instance *instance, const char *kind,
 			 phys_addr_t address, size_t size)

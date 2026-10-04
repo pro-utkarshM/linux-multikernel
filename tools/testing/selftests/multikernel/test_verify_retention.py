@@ -5,13 +5,13 @@ import unittest
 from test_verify_lifecycle import event
 
 R = dict(image=0x1000, ctrl=0xd0000000, manifest=0x9000, ring=0xa000,
-         pool=0x2000, size=268435456, owned=2, tracked=2)
+         pool=0x2000, size=268435456, owned=2, tracked=2, ring_size=8192, manifest_size=4096)
 
 
 def snapshot(state='failed'):
     return ('[ 33.0] MK_TEST_RESOURCE id=1 phase=confirm-exit state=' + state +
             ' image=1000 ctrl=d0000000 manifest=9000 ring=a000 pool=2000'
-            ' size=268435456 owned=2 tracked=2\n')
+            ' size=268435456 owned=2 tracked=2 ring_size=8192 manifest_size=4096\n')
 
 
 def retention_log(mode='failed-retain', fault=8):
@@ -73,6 +73,23 @@ class Retention(unittest.TestCase):
     def test_reachable_failed_state_and_lost_ack_retention(self):
         for mode, fault in (('failed-retain', 8), ('lost-ack', 7)):
             self.assertEqual(self.verify(retention_log(mode, fault), mode, fault)['result'], 'PASS')
+
+    def test_boot_pages_freed_after_pool_pointer_cleared(self):
+        text=retention_log().replace('kind=ring phys=a000 size=8192 pool=2000',
+                                    'kind=ring phys=a000 size=8192 pool=0').replace(
+                                    'kind=manifest phys=9000 size=4096 pool=2000',
+                                    'kind=manifest phys=9000 size=4096 pool=0')
+        self.assertEqual(self.verify(text)['result'],'PASS')
+        with self.assertRaises(ValueError): self.verify(text.replace('kind=ring phys=a000 size=8192',
+                                                                    'kind=ring phys=a000 size=4096'))
+
+    def test_duplicate_release_and_wrong_injection_scope_rejected(self):
+        text=retention_log()
+        pool='MK_TEST_FREE id=1 kind=pool phys=0 size=268435456 pool=2000'
+        with self.assertRaises(ValueError): self.verify(text.replace(pool,pool+'\\n'+pool))
+        for base,mode,fault in ((text,'failed-retain',8),(recovery_log(),'lost-ack',0)):
+            with self.assertRaises(ValueError):
+                self.verify(base+'MK_FW_PENDING mode=7 hart=7 actual=1 reported=3\n',mode,fault)
 
     def test_load_only_control_does_not_require_exec_time_control_block(self):
         text=retention_log()
