@@ -130,7 +130,7 @@ def workload(after_nested=None, *, profile='nested'):
         marker('NESTED_HOST_SURVIVED',
                online=Path('/sys/devices/system/cpu/online').read_text().strip(),
                boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip())
-        marker('NESTED_PASS', slice='native-admission' if after_nested else 'nested-pool-prerequisite')
+        marker('NESTED_PASS', slice='native-' + profile if after_nested else 'nested-pool-prerequisite')
     finally:
         os.close(fd)
 

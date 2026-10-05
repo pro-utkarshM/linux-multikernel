@@ -14,6 +14,9 @@
 #include <linux/ioport.h>
 #include <linux/rcupdate.h>
 #include "internal.h"
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+#include <asm/multikernel_test.h>
+#endif
 
 /* Callback management */
 static struct mk_ipi_handler __rcu *mk_handlers;
@@ -98,8 +101,20 @@ void multikernel_unregister_handler(struct mk_ipi_handler *handler)
 	raw_spin_unlock_irqrestore(&mk_handlers_lock, flags);
 
 	if (p) {
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+		unsigned long identity = (unsigned long)p;
+
+		mk_native_rcu_boundary(identity, 2); /* actually unlinked */
+		mk_native_rcu_boundary(identity, 3); /* native grace period */
+#endif
 		synchronize_rcu();
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+		mk_native_rcu_boundary(identity, 5);
+#endif
 		kfree(p);
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+		mk_native_rcu_boundary(identity, 6); /* no freed-node access */
+#endif
 	}
 }
 EXPORT_SYMBOL(multikernel_unregister_handler);
@@ -279,6 +294,10 @@ unlock:
 
 static void mk_ipi_drain_ring(void)
 {
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	u64 native_cookie;
+	unsigned int native_type;
+#endif
 	struct mk_ipi_data *slot;
 	struct mk_ipi_handler *handler;
 	unsigned int head, tail, next_tail;
@@ -338,11 +357,20 @@ static void mk_ipi_drain_ring(void)
 		}
 		rcu_read_unlock();
 
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+		/* Copy before allowing a producer to reuse this slot. */
+		native_type = slot->type;
+		memcpy(&native_cookie, slot->buffer, sizeof(native_cookie));
+#endif
+
 		/* Mark consumed so the slot reads as unpublished again */
 		slot->data_size = 0;
 		next_tail = mk_ring_idx(tail + 1);
 		/* Pair with producers' acquire: clear precedes all future reuse. */
 		atomic_set_release(&mk_self->ipi_data->ring.tail, next_tail);
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+		mk_native_rcu_consumed(native_type, data_size, native_cookie);
+#endif
 		messages_processed++;
 
 		if (messages_processed >= MK_IPI_RING_SIZE)

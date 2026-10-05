@@ -88,6 +88,7 @@ static int __init concurrency_init(void)
 	debugfs_create_file("local_snapshot", 0400, directory, NULL,
 			    &local_snapshot_fops);
 	mk_native_gate_init(directory);
+	mk_native_rcu_init(directory);
 	return 0;
 }
 late_initcall(concurrency_init);

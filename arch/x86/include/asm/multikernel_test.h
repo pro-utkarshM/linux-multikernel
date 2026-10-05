@@ -17,7 +17,12 @@ enum mk_native_point {
 	MK_NATIVE_GATE_TIMEOUT,
 };
 struct dentry;
+struct mk_ipi_data;
 void mk_native_gate_init(struct dentry *directory);
+void mk_native_rcu_init(struct dentry *directory);
+void mk_native_rcu_vector(bool entered);
+void mk_native_rcu_boundary(unsigned long handler, unsigned int point);
+void mk_native_rcu_consumed(unsigned int type, size_t size, u64 cookie);
 void mk_native_checkpoint(unsigned int point, u64 request, u64 cpu,
 			  int result, unsigned int operation);
 #endif

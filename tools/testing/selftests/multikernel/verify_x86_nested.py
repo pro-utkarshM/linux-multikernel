@@ -16,7 +16,7 @@ def cpu_set(value, size=None):
             and len(set(value)) == len(value) and value == sorted(value))
 
 
-def verify(trace, expected_revision=None, *, admission=False):
+def verify(trace, expected_revision=None, *, admission=False, qualification=None):
     names = ('NESTED_BEGIN', 'CHILD_ALIVE', 'PING', 'CHILD_REPLY',
              'NESTED_POOL_READY', 'NESTED_CPU_RETURNED', 'NESTED_POOL_RETIRED',
              'NESTED_HALTED', 'NESTED_UNLOADED', 'NESTED_HOST_SURVIVED', 'NESTED_PASS')
@@ -124,7 +124,8 @@ def verify(trace, expected_revision=None, *, admission=False):
             errors.append(f'{name}: reusable state or retained ownership mismatch')
     if events['NESTED_HOST_SURVIVED'].get('online') != '0-2':
         errors.append('host topology not preserved')
-    if events['NESTED_PASS'].get('slice') != ('native-admission' if admission else 'nested-pool-prerequisite'):
+    expected_slice = qualification or ('native-admission' if admission else 'nested-pool-prerequisite')
+    if events['NESTED_PASS'].get('slice') != expected_slice:
         errors.append('wrong qualification slice')
     return errors
 

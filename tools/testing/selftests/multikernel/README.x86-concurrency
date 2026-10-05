@@ -77,3 +77,23 @@ covered: the controller-first case retires that allocation before retry;
 the worker-first case removes its CPU before creating the allocation.
 IRQ/RCU callback, MKTTY close, ring writer retirement, lockdep/RT and physical
 hardware qualification remain separate gates; this profile cannot certify them.
+
+Third gate, first case: actual IPI callback versus unregister
+-----------------------------------------------------------
+
+Use --profile=rcu, mk_test=x86-rcu-host and verify_x86_rcu.py with the same
+eight-CPU QEMU/build/bundle discipline. The child sends a nonce using the
+existing MK_MSG_USER family, through the real ring and x86 vector. H0 holds
+the actual callback inside its RCU read section; a precreated H1 kthread
+unlinks that exact handler and calls synchronize_rcu(). H2 observes the
+waiter sleeping with unlink/grace-entry records present and no return/free,
+then releases. A monotonic IRQ-safe two-second deadline aborts qualification
+and releases automatically; this gate never sleeps or prints from IRQ context.
+
+Preallocated records prove vector/hardirq entry, last context access, grace
+period completion, actual handler/context frees, and two consumed messages
+with exactly one callback invocation. The second message arrives after
+unregister and must not invoke the old callback. Only a task-observer reference
+is retained for the disposable VM's one-shot report; it does not pin the tested
+handler/context. The test files require the existing config/boot/QEMU guards.
+This does not qualify messaging terminal cleanup, MKTTY close or ring writers.
