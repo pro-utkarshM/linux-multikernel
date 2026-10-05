@@ -14,9 +14,11 @@ struct mk_spawn_context {
 	u32 target_apic_id, flags, ready;
 };
 struct mk_cpu_set { bool present; u32 id; };
+struct mk_ident_pgtable { int unused; };
+static struct mk_ident_pgtable park_pgt;
 struct mk_pool {
 	struct mk_cpu_set *cpus;
-	struct { unsigned long slot_phys; } arch;
+	struct { unsigned long slot_phys; struct mk_ident_pgtable *pgt; } arch;
 	bool park_lock;
 };
 struct mk_instance {
@@ -31,6 +33,8 @@ static struct mk_instance parent = { .pool_slot_phys = 0xa000,
 	.cpus_on_slot = &adopted_cpus }, *host_instance;
 static unsigned int maps, unmaps, publishes, checks, failures;
 static bool map_failure, publication_locked;
+static bool park_trampoline_mapped, dispatch_fetch_mapped;
+static int park_map_error;
 static unsigned long mapped_phys;
 static struct { void *pgd; } init_mm;
 static struct { struct { unsigned long sp; } thread; } idle = { .thread.sp = 0x123000 };
@@ -80,6 +84,16 @@ static int mk_add_2mb_mapping(void *pgd, unsigned long va, unsigned long phys,
 	assert(pgd == init_mm.pgd && phys == own.trampoline_phys && !(flags & _PAGE_RW));
 	return 0;
 }
+static inline int mk_ident_map_range(struct mk_ident_pgtable *pgt,
+		unsigned long start, unsigned long end)
+{
+	assert(pool.park_lock && pgt == &park_pgt);
+	assert(start == own.trampoline_phys && end == start + 4096);
+	if (!park_map_error)
+		park_trampoline_mapped = true;
+	return park_map_error;
+}
+#define PAGE_SIZE 4096
 static unsigned long per_cpu_offset(unsigned int cpu) { return 0x321000 + cpu; }
 #define idle_task(cpu) (&idle)
 #define multikernel_secondary_startup 0xabc000UL
@@ -87,6 +101,7 @@ static unsigned long per_cpu_offset(unsigned int cpu) { return 0x321000 + cpu; }
 #define smp_wmb() ((void)0)
 #define WRITE_ONCE(p, v) do { \
 	publication_locked = !mk_pool || mk_pool->park_lock; \
+	dispatch_fetch_mapped = &(p) != &local.ready || park_trampoline_mapped; \
 	(p) = (v); publishes++; \
 } while (0)
 #include "wake-production.h"
@@ -107,8 +122,11 @@ static void reset(void)
 	maps = unmaps = publishes = 0;
 	mapped_phys = 0;
 	publication_locked = map_failure = false;
+	park_trampoline_mapped = dispatch_fetch_mapped = false;
+	park_map_error = 0;
 	pool.park_lock = false;
 	pool.arch.slot_phys = 0x9000;
+	pool.arch.pgt = &park_pgt;
 	free_cpus.present = adopted_cpus.present = false;
 	mk_pool = &pool;
 	host_instance = &parent;
@@ -125,6 +143,11 @@ int main(void)
 	expect("dispatch is child kernel, not park kernel", local.trampoline_phys == own.trampoline_phys &&
 	       local.kernel_entry == multikernel_secondary_startup && local.stack == idle.thread.sp &&
 	       local.spawn_cr3 == (unsigned long)init_mm.pgd && local.gs_base == per_cpu_offset(2));
+	expect("complete dispatch targets selected CPU and trampoline continuation",
+	       local.target_apic_id == 17 && local.flags == MK_SPAWN_F_SECONDARY &&
+	       local.secondary_trampoline_phys == own.trampoline_phys + 8 &&
+	       local.identity_cr3 == 0x111000);
+	expect("initial instruction fetch mapped in old park table before publication", dispatch_fetch_mapped);
 	expect("publication holds park lifetime lock", publication_locked && !pool.park_lock);
 	reset();
 	adopted_cpus.present = true;
@@ -149,6 +172,18 @@ int main(void)
 	ret = multikernel_wakeup_secondary_cpu_64(17, 0, 2);
 	expect("missing local slot cannot fall back to wrong mailbox", ret == -ENODEV &&
 	       !publishes && !own.ready && free_cpus.present && !pool.park_lock);
+	reset();
+	free_cpus.present = true;
+	park_map_error = -ENOMEM;
+	ret = multikernel_wakeup_secondary_cpu_64(17, 0, 2);
+	expect("park mapping failure leaves free ownership and publishes nothing", ret == -ENOMEM &&
+	       !publishes && free_cpus.present && !pool.park_lock);
+	reset();
+	free_cpus.present = true;
+	pool.arch.pgt = NULL;
+	ret = multikernel_wakeup_secondary_cpu_64(17, 0, 2);
+	expect("missing park table refuses dispatch without changing ownership", ret == -ENODEV &&
+	       !publishes && free_cpus.present && !pool.park_lock);
 	printf("Wake slot: %u checks, %u failures (non-native mapping boundaries)\n", checks, failures);
 	return failures ? 1 : 0;
 }
