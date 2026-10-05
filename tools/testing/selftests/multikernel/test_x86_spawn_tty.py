@@ -160,6 +160,9 @@ class SpawnOracle(unittest.TestCase):
             extra = dict(offline=[0, 1]) if mode == 'spawn-offline' else {}
             if extra:
                 fields.update(offline=[0, 1], restored=[0, 1, 2])
+                fields['pool_held'] = dict(owned_cpus=[3, 4], online_cpus=[3, 4], pool_cpus=[5], chunks=[[0x126200000, 16777216]], slot='126208000', park='126204000')
+                fields['pool_return'] = dict(owned_cpus=[3, 4, 5], online_cpus=[3, 4, 5], pool_cpus=[], chunks=[[0x126200000, 16777216]], slot='126208000', park='126204000', status='applied', transaction=4)
+                fields['pool_retired'] = dict(owned_cpus=[3, 4, 5], online_cpus=[3, 4, 5], pool_cpus=[], chunks=[], slot='0', park='0', status='applied', transaction=5)
             def trace():
                 middle = [mark('TTY_BEGIN', mode=mode, taint=0), mark('TTY_HELD', state=held, **extra), mark('TTY_COMPLETE', state=final, taint=0, **fields)]
                 middle += kmsg_fixture.transfer()
@@ -167,6 +170,15 @@ class SpawnOracle(unittest.TestCase):
                 return ''.join(nested[:7] + middle + [s.replace('nested-pool-prerequisite', 'native-tty') for s in nested[7:]])
             self.assertEqual(verifier.verify(trace(), nested_fixture.REVISION, mode), [])
             if mode == 'spawn-offline':
+                saved = fields.pop('pool_retired')
+                self.assertTrue(verifier.verify(trace(), nested_fixture.REVISION, mode))
+                fields['pool_retired'] = saved
+                fields['pool_return']['status'] = 'failed'
+                self.assertTrue(verifier.verify(trace(), nested_fixture.REVISION, mode))
+                fields['pool_return']['status'] = 'applied'
+                fields['pool_retired']['park'] = '126204000'
+                self.assertTrue(verifier.verify(trace(), nested_fixture.REVISION, mode))
+                fields['pool_retired']['park'] = '0'
                 fields['offline'] = [False, True]
                 self.assertTrue(verifier.verify(trace(), nested_fixture.REVISION, mode))
                 fields['offline'] = [0, 1]

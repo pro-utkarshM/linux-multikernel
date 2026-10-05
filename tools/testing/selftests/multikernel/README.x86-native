@@ -92,11 +92,17 @@ delivery. The expected dropped-input warning is not a lockdep warning.
 
 Offline uses explicitly injected queue_work_on placement on child logical
 CPU2. The same real RX invocation must start there, remain held across
-cpu2/online=0, and continue on another online CPU before CPU2 is restored.
+removal into the child's local pool, and continue on another online CPU
+before CPU2 is returned through the existing pool overlay. The physical ID
+is resolved separately from logical CPU2. Return must restore ownership and
+online state before retiring the temporary 16 MiB park-storage grant.
 Ordinary host routing targets the child's first CPU; sender affinity alone
 would not exercise this condition. This lane covers ordinary CPU hotplug,
-not MK ownership transfer, pending-but-never-started work, or every scheduler.
+via local pool departure/return, not parent-to-child hot-add,
+pending-but-never-started work, or every scheduler.
 The nested pool prerequisite still runs separately before each session lane.
+Direct cpu2/online=0 then =1 failed to re-online the CPU in an earlier run;
+that ordinary-hotplug failure remains open and is not fixed by this lane.
 
 TTY_HELD is a snapshot taken before release and printed after stdout is
 available again; kernel event ordering supplies the causal evidence, not its

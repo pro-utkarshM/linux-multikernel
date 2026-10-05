@@ -94,11 +94,23 @@ def child(nonce, mode):
         thread.start()
         held = wait(lambda s: s['drain_waiting'] and len(s['events']) == (5 if number == 2 else 4))
     elif number == 4:
+        from kerf.topology import logical_to_apic
+        from x86_nested_child_init import snapshot
+        from x86_host_init import cli
         if online() != [0, 1, 2]:
             raise RuntimeError('offline target already absent')
-        Path('/sys/devices/system/cpu/cpu2/online').write_text('0')
+        before = snapshot()
+        victim = logical_to_apic()[2]
+        if victim != before['owned_cpus'][-1]:
+            raise RuntimeError('unexpected logical/physical offline target mapping')
+        # The spawn wakeup path resumes pool-parked CPUs. Ordinary sysfs
+        # offline enters a different dead loop and did not re-online in QEMU.
+        cli('init', '--cpus=' + str(victim), '--memory=16MB', '--devices=none')
+        outcome['pool_held'] = snapshot()
         outcome['offline'] = online()
-        if outcome['offline'] != [0, 1] or state()['worker_done']:
+        if (outcome['offline'] != [0, 1] or state()['worker_done']
+                or outcome['pool_held']['pool_cpus'] != [victim]
+                or outcome['pool_held']['owned_cpus'] != before['owned_cpus'][:-1]):
             raise RuntimeError('CPU offline did not overlap held worker')
     (GATE / 'spawn_tty_release').write_text('1')
     if session:
@@ -127,9 +139,25 @@ def child(nonce, mode):
     if old_hung_file is not None:
         os.close(old_hung_file)
     if number == 4:
+        from kerf.models import PoolMemoryRegion
+        from kerf.pool_diff import PoolDiff
+        from x86_nested_child_init import apply_pool
         if online() != [0, 1]:
             raise RuntimeError('victim CPU returned before worker continuation')
-        Path('/sys/devices/system/cpu/cpu2/online').write_text('1')
+        result = apply_pool(PoolDiff(cpus_to_host=[victim]))
+        outcome['pool_return'] = dict(result, **snapshot())
+        if (result['status'] != 'applied'
+                or outcome['pool_return']['owned_cpus'] != before['owned_cpus']
+                or outcome['pool_return']['online_cpus'] != before['online_cpus']
+                or outcome['pool_return']['pool_cpus']):
+            raise RuntimeError('CPU return failed; retain pool park memory')
+        chunks = [PoolMemoryRegion(base=base, size=size)
+                  for base, size in outcome['pool_return']['chunks']]
+        result = apply_pool(PoolDiff(memory_to_host=chunks))
+        outcome['pool_retired'] = dict(result, **snapshot())
+        if (result['status'] != 'applied' or outcome['pool_retired']['chunks']
+                or outcome['pool_retired']['slot'] != '0' or outcome['pool_retired']['park'] != '0'):
+            raise RuntimeError('pool park storage not retired; refuse parent reclaim')
         outcome['restored'] = online()
     termios.tcsetattr(0, termios.TCSANOW, attrs)
     marker('TTY_HELD', nonce=nonce, state=held,

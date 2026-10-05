@@ -8,7 +8,7 @@ import hashlib
 import json
 from pathlib import Path
 import re
-from verify_x86_nested import verify as verify_nested, validate_nested_bundle
+from verify_x86_nested import verify as verify_nested, validate_nested_bundle, cpu_set
 from x86_kmsg import MAX_LOG, validate_blob
 from x86_lockdep import decode_record
 
@@ -162,6 +162,35 @@ def verify(trace, revision, mode='ipi'):
                     if (type(value) is not list or any(type(cpu) is not int for cpu in value)
                             or value != expected):
                         raise ValueError('CPU offline did not overlap worker continuation')
+                pool = final['pool_held']
+                returned, retired = final['pool_return'], final['pool_retired']
+                assigned = child['physical_cpus']
+                for state, owned, pooled in ((pool, assigned[:-1], assigned[-1:]),
+                                              (returned, assigned, []), (retired, assigned, [])):
+                    for key, expected in (('owned_cpus', owned), ('online_cpus', owned),
+                                          ('pool_cpus', pooled)):
+                        if not cpu_set(state.get(key)) or state[key] != expected:
+                            raise ValueError('offline pool ownership/online mismatch')
+                chunks = pool['chunks']
+                if (type(chunks) is not list or len(chunks) != 1 or type(chunks[0]) is not list
+                        or len(chunks[0]) != 2 or any(type(v) is not int for v in chunks[0])):
+                    raise ValueError('missing offline pool grant')
+                base, size = chunks[0]
+                if base <= 0 or base % 4096 or size != 16777216 or returned['chunks'] != chunks:
+                    raise ValueError('invalid or prematurely retired offline pool grant')
+                for key in ('slot', 'park'):
+                    if (type(pool.get(key)) is not str or not re.fullmatch(r'[0-9a-f]+', pool[key])
+                            or not base <= int(pool[key], 16) < base + size
+                            or returned.get(key) != pool[key] or retired.get(key) != '0'):
+                        raise ValueError('offline pool park storage not safely retired')
+                if retired['chunks']:
+                    raise ValueError('offline pool allocation retained')
+                previous = one('NESTED_POOL_RETIRED')[1]['transaction']
+                for state in (returned, retired):
+                    tx = state.get('transaction')
+                    if type(tx) is not int or tx <= previous or state.get('status') != 'applied':
+                        raise ValueError('offline return/retirement transaction not applied')
+                    previous = tx
         else:
             errors += verify_records(held['state'], final['state'])
     except (KeyError, ValueError, TypeError, binascii.Error) as error:
