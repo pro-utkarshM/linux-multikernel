@@ -1018,6 +1018,23 @@ int multikernel_wakeup_secondary_cpu_64(u32 apicid, unsigned long start_eip,
 	/* Initial secondary boot precedes baseline creation (pool == NULL). */
 	if (pool)
 		mutex_lock(&pool->park_lock);
+	if (pool && mk_cpu_set_contains(pool->cpus, apicid)) {
+		/*
+		 * The park loop jumps to the physical trampoline before that
+		 * trampoline switches CR3. A nested pool maps only its donated
+		 * chunks; the parent-given boot trampoline can be outside them.
+		 * Map its initial fetch in the OLD park table before publishing.
+		 * The mapping and any allocated table pages live with this pool.
+		 */
+		if (!pool->arch.pgt) {
+			ret = -ENODEV;
+			goto out_unlock;
+		}
+		ret = mk_ident_map_range(pool->arch.pgt, trampoline_phys,
+					 trampoline_phys + PAGE_SIZE);
+		if (ret)
+			goto out_unlock;
+	}
 	slot = mk_wake_slot(apicid, own);
 	if (!slot) {
 		ret = -ENODEV;
