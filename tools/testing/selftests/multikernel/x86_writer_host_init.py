@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import termios
 import threading
 import time
 sys.path.insert(0, '/usr/lib/python3/dist-packages')
@@ -57,6 +58,9 @@ def unload(fd, pending, nonce, child, spare):
     final = wait(lambda s: s['probed'], 1)
     marker('WRITER_COMPLETE', nonce=nonce, state=final,
            taint=int(Path('/proc/sys/kernel/tainted').read_text()))
+    # The following ownership read emits kernel console messages. Drain this
+    # userspace record first so those messages cannot split queued UART bytes.
+    termios.tcdrain(1)
     return pending
 
 
