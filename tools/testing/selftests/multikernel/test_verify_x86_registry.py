@@ -20,7 +20,7 @@ class RegistryOracle(unittest.TestCase):
                   mark('REGISTRY_COMPLETE', nonce=held['cookie'], mode='cleanup', state=final),
                   mark('REGISTRY_RETAINED', assigned_cpus=[3, 4, 5], status='active',
                        reclamation='not-attempted')]
-        trace = ''.join(nested[:7] + middle + nested[10:]).replace(
+        trace = ''.join(nested[:7] + middle + [nested[7].splitlines(keepends=True)[0]] + nested[10:]).replace(
             'nested-pool-prerequisite', 'native-registry-cleanup')
         self.assertEqual(verifier.verify(trace, nested_fixture.REVISION, 'cleanup'), [])
         for bad in (trace.replace('"status": "active"', '"status": "ready"'),

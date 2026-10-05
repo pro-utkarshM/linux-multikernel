@@ -82,7 +82,11 @@ class X86Provenance(unittest.TestCase):
             for name in names.values():
                 path = bundle / name
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_bytes(name.encode())
+                path.write_bytes((
+                    'CONFIG_LOCKDEP=y\nCONFIG_PROVE_LOCKING=y\n'
+                    'CONFIG_PROVE_RAW_LOCK_NESTING=y\nCONFIG_PROVE_RCU=y\n'
+                    'CONFIG_PROVE_RCU_LIST=y\nCONFIG_DEBUG_ATOMIC_SLEEP=y\n'
+                    'CONFIG_DEBUG_PREEMPT=y\n' if name == 'kernel.config' else name).encode())
             proof = {'schema': 1, 'revision': REVISION, 'build_exit': 0,
                      'artifacts': {name: packer.digest(bundle / path) for name, path in names.items()}}
             (bundle / 'mk-x86-build.json').write_text(json.dumps(proof))

@@ -36,7 +36,7 @@ class PhaseBounds(unittest.TestCase):
                     if mode == 'cleanup':
                         middle += [mark('REGISTRY_RETAINED', assigned_cpus=[3, 4, 5],
                                         status='active', reclamation='not-attempted')]
-                        tail = nested[10:]
+                        tail = [nested[7].splitlines(keepends=True)[0]] + nested[10:]
                     check = lambda trace, rev: verify_x86_registry.verify(trace, rev, mode)
                 elif profile == 'tty':
                     held, final = tty_fixture.TtyOracle().records()

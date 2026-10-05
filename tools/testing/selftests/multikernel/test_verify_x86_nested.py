@@ -27,6 +27,8 @@ class NestedPoolGate(unittest.TestCase):
 
     def trace(self):
         def event(name, **fields):
+            if name in ('NESTED_BEGIN', 'CHILD_ALIVE', 'NESTED_HOST_SURVIVED', 'CHILD_LOCKDEP_FINAL'):
+                fields['debug_locks'] = 1
             return 'MK_X86_' + name + ' ' + json.dumps(fields) + '\n'
         return [
             event('NESTED_BEGIN', host_cpus=[0, 1, 2], child_cpus=[3, 4, 5],
@@ -44,6 +46,8 @@ class NestedPoolGate(unittest.TestCase):
             event('NESTED_POOL_RETIRED', nonce='1234567890abcdef', cpu=5,
                   online_cpus=[3, 4, 5], owned_cpus=[3, 4, 5], pool_cpus=[],
                   slot='0', park='0', chunks=[], transaction=2, status='applied'),
+            event('CHILD_LOCKDEP_FINAL', nonce='1234567890abcdef',
+                  boot_id='a84d9504-2322-4ec3-94cc-f7cf9c19fddb') +
             'Instance 1 (native-child) halted, all CPUs confirmed parked\n',
             event('NESTED_HALTED', status='loaded', assigned_cpus=[3, 4, 5]),
             event('NESTED_UNLOADED', status='ready', assigned_cpus=[3, 4, 5]),
@@ -112,7 +116,11 @@ class NestedPoolGate(unittest.TestCase):
             for profile, enabled in (('nested', True), ('halt', True),
                                      (None, True), ('nested', False)):
                 with self.subTest(profile=profile, enabled=enabled):
-                    config = 'CONFIG_MULTIKERNEL=y\nCONFIG_DEBUG_FS=y\n'
+                    config = ('CONFIG_MULTIKERNEL=y\nCONFIG_DEBUG_FS=y\n'
+                              'CONFIG_LOCKDEP=y\nCONFIG_PROVE_LOCKING=y\n'
+                              'CONFIG_PROVE_RAW_LOCK_NESTING=y\nCONFIG_PROVE_RCU=y\n'
+                              'CONFIG_PROVE_RCU_LIST=y\nCONFIG_DEBUG_ATOMIC_SLEEP=y\n'
+                              'CONFIG_DEBUG_PREEMPT=y\n')
                     if enabled:
                         config += 'CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST=y\n'
                     hashes = {}
@@ -151,6 +159,8 @@ class NestedPoolGate(unittest.TestCase):
             if after_stop and args == ('kill', host.NAME):
                 outputs.append(failure)
         def text(path, *args, **kwargs):
+            if str(path) == '/proc/lockdep_stats':
+                return ' debug_locks: 1\n'
             if str(path).endswith('/cpu/online'):
                 return '0-7' if not calls else '0-2'
             if str(path) == '/payload/source-revision':
@@ -160,6 +170,10 @@ class NestedPoolGate(unittest.TestCase):
             if outputs:
                 return outputs.pop(0)
             raise BlockingIOError()
+        def write(fd, value):
+            if value == b'lockdep 1234567890abcdef\n':
+                outputs.append(self.trace()[7].splitlines(keepends=True)[0].encode())
+            return len(value)
         clock = iter(index / 10 for index in range(10000))
         with mock.patch.dict(sys.modules, {'kerf.topology': SimpleNamespace(
                 logical_to_apic=lambda: dict(enumerate(range(8))))}), \
@@ -169,7 +183,7 @@ class NestedPoolGate(unittest.TestCase):
                 mock.patch.object(host, 'status', side_effect=lambda value: value), \
                 mock.patch.object(host.secrets, 'token_hex', return_value='1234567890abcdef'), \
                 mock.patch.object(host.os, 'open', return_value=7), \
-                mock.patch.object(host.os, 'write', side_effect=lambda fd, value: len(value)), \
+                mock.patch.object(host.os, 'write', side_effect=write), \
                 mock.patch.object(host.os, 'read', side_effect=read), \
                 mock.patch.object(host.os, 'close'), \
                 mock.patch.object(host.time, 'monotonic', side_effect=lambda: next(clock)), \

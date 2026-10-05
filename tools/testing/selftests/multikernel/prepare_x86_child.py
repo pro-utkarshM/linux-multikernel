@@ -126,7 +126,8 @@ def main():
     inputs = [args.kernel_build / 'arch/x86/boot/bzImage', args.kernel_build / 'vmlinux',
               config, args.kernel_build / 'mk-x86-build.json',
               HERE / 'x86_host_init.py', HERE / 'x86_child_init.py',
-              HERE / 'verify_x86_child.py', HERE / 'x86_child.config', Path(__file__).resolve()]
+              HERE / 'verify_x86_child.py', HERE / 'x86_child.config',
+              HERE / 'x86_lockdep.py', Path(__file__).resolve()]
     if args.profile != 'halt':
         inputs += [HERE / 'x86_nested_host_init.py', HERE / 'x86_nested_child_init.py',
                    HERE / 'verify_x86_nested.py']
@@ -188,6 +189,7 @@ def main():
     for library in runtime_libraries:
         install(library, str(library).lstrip('/'))
     install(host_init, 'init')
+    install(HERE / 'x86_lockdep.py', 'usr/lib/python3/dist-packages/x86_lockdep.py')
     if args.profile != 'halt':
         install(HERE / 'x86_host_init.py', 'usr/lib/python3/dist-packages/x86_host_init.py')
     if args.profile in ('admission', 'rcu', 'registry', 'tty', 'writer', 'destroy'):
@@ -220,6 +222,7 @@ def main():
     pack(child, bundle / 'child-initrd.cpio.gz')
     install(bundle / 'child-initrd.cpio.gz', 'payload/child-initrd.cpio.gz')
     shutil.copy2(HERE / 'verify_x86_child.py', bundle / 'verify_x86_child.py')
+    shutil.copy2(HERE / 'x86_lockdep.py', bundle / 'x86_lockdep.py')
     if args.profile != 'halt':
         shutil.copy2(HERE / 'verify_x86_nested.py', bundle / 'verify_x86_nested.py')
     if args.profile == 'admission':

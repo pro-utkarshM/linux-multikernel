@@ -8,6 +8,7 @@ import re
 import uuid
 
 from verify_x86_child import validate_bundle
+from x86_lockdep import verify_boundaries
 
 
 def cpu_set(value, size=None):
@@ -22,7 +23,14 @@ def verify(trace, expected_revision=None, *, admission=False, qualification=None
              'NESTED_HALTED', 'NESTED_UNLOADED', 'NESTED_HOST_SURVIVED', 'NESTED_PASS')
     if terminal:
         names = tuple(name for name in names if name not in ('NESTED_HALTED', 'NESTED_UNLOADED'))
-    errors, events, positions = [], {}, {}
+    after = {'native-rcu': 'RCU_COMPLETE', 'native-tty': 'TTY_CHILD_HEALTH',
+             'native-registry-replace': 'REGISTRY_COMPLETE',
+             'native-registry-cleanup': 'REGISTRY_COMPLETE'}.get(qualification, 'NESTED_POOL_RETIRED')
+    if admission:
+        after = 'ADMISSION_DRAIN_WAITING'
+    errors = verify_boundaries(trace, 'NESTED_BEGIN', 'NESTED_HOST_SURVIVED', after,
+                               terminal=terminal, before='ADMISSION_COMPLETE' if admission else None)
+    events, positions = {}, {}
     if re.search(r'MK_X86_FAIL|Kernel panic - not syncing:|WARNING:|BUG:|Sent NMI to'
                  r'|general protection fault|Oops:|detected (?:expedited )?stalls'
                  r'|fault while parked'

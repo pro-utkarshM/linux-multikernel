@@ -7,6 +7,8 @@ import os
 from pathlib import Path
 import platform
 import sys
+sys.path.insert(0, '/usr/lib/python3/dist-packages')
+from x86_lockdep import read_debug_locks, child_final
 
 
 def mount(source, target, kind):
@@ -44,6 +46,7 @@ def main():
     if fd > 2:
         os.close(fd)
     marker('CHILD_ALIVE', pid=os.getpid(), instance=1,
+           debug_locks=read_debug_locks(),
            online=Path('/sys/devices/system/cpu/online').read_text().strip(),
            physical_cpus=sorted(logical_to_apic().values()),
            boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip(),
@@ -52,6 +55,8 @@ def main():
         fields = line.strip().split()
         if len(fields) == 2 and fields[0] == 'ping':
             marker('CHILD_REPLY', nonce=fields[1])
+        elif len(fields) == 2 and fields[0] == 'lockdep':
+            child_final(marker, fields[1])
         elif len(fields) == 2 and fields[0] == 'terminate' and fields[1] in ('poweroff', 'reboot'):
             os.sync()
             command = 0x4321FEDC if fields[1] == 'poweroff' else 0x01234567

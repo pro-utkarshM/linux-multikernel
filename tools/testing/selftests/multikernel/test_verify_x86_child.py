@@ -26,6 +26,8 @@ class X86ChildGate(unittest.TestCase):
 
     def trace(self):
         def event(name, **fields):
+            if name in ('BEGIN', 'CHILD_ALIVE', 'HOST_SURVIVED', 'CHILD_LOCKDEP_FINAL'):
+                fields['debug_locks'] = 1
             return 'MK_X86_' + name + ' ' + json.dumps(fields) + '\n'
         return [
             event('BEGIN', host_cpus=[0, 1], child_cpus=[2, 3], spare_cpus=[4, 5],
@@ -35,7 +37,9 @@ class X86ChildGate(unittest.TestCase):
                   release='7.0.0-mk3-test'),
             event('PING', nonce='1234567890abcdef'),
             event('CHILD_REPLY', nonce='1234567890abcdef'),
-            ('Instance 1 (native-child) halted, all CPUs confirmed parked\n' +
+            (event('CHILD_LOCKDEP_FINAL', nonce='1234567890abcdef',
+                   boot_id='a84d9504-2322-4ec3-94cc-f7cf9c19fddb') +
+             'Instance 1 (native-child) halted, all CPUs confirmed parked\n' +
              event('CHILD_CAPTURED', nonce='1234567890abcdef', pending_bytes=0)),
             event('HALTED', mode='requested', status='loaded', assigned_cpus=[2, 3]),
             event('UNLOADED', status='ready', assigned_cpus=[2, 3]),

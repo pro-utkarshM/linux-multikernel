@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import subprocess
 import uuid
+from x86_lockdep import REQUIRED_CONFIG, verify_boundaries
 
 HALT_MODES = ('requested', 'force', 'poweroff', 'reboot')
 HALT_LANES = HALT_MODES + tuple(mode + '-retain' for mode in HALT_MODES)
@@ -18,7 +19,7 @@ def verify(trace, halt='requested', expected_revision=None):
         return ['unsupported halt lane']
     mode = halt.removesuffix('-retain')
     retaining = halt.endswith('-retain')
-    errors = []
+    errors = verify_boundaries(trace, 'BEGIN', 'HOST_SURVIVED', 'CHILD_REPLY')
     names = ('BEGIN', 'CHILD_ALIVE', 'PING', 'CHILD_REPLY', 'HALTED',
              'UNLOADED', 'HOST_SURVIVED', 'PASS')
     events = {}
@@ -172,6 +173,8 @@ def verify(trace, halt='requested', expected_revision=None):
 
 def validate_bundle(bundle, expected_revision):
     try:
+        if not REQUIRED_CONFIG <= set((bundle / 'kernel.config').read_text().splitlines()):
+            return ['strict lockdep build configuration missing']
         provenance = json.loads((bundle / 'provenance.json').read_text())
         proof = json.loads((bundle / 'mk-x86-build.json').read_text())
         files = {'.config': 'kernel.config', 'vmlinux': 'rootfs/payload/vmlinux',

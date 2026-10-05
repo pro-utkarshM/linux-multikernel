@@ -9,6 +9,7 @@ from x86_host_init import NAME, cli, marker, ownership, status
 from x86_nested_host_init import main, TERMINAL_CAPTURE, capture_tail
 from x86_admission_host_init import Console
 from x86_rcu_host_init import GATE, wait
+from x86_lockdep import read_debug_locks, probe_child
 
 
 def registry(fd, pending, nonce, child, spare):
@@ -35,6 +36,7 @@ def registry(fd, pending, nonce, child, spare):
     final = wait(lambda s: s['done'] and s['registration_done'] and s['consumed'] == 2
                  and len(s['events']) == count, 8)
     marker('REGISTRY_COMPLETE', nonce=nonce, mode=mode, state=final)
+    console.pending = probe_child(fd, console.pending, nonce)
     if mode == 'replace':
         cli('kill', NAME)
         return console.pending
@@ -46,6 +48,7 @@ def registry(fd, pending, nonce, child, spare):
     if pending:
         raise RuntimeError('partial terminal child diagnostic')
     marker('NESTED_HOST_SURVIVED',
+           debug_locks=read_debug_locks(),
            online=Path('/sys/devices/system/cpu/online').read_text().strip(),
            boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip())
     marker('NESTED_PASS', slice='native-registry-cleanup')

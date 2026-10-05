@@ -10,6 +10,7 @@ import sys
 
 sys.path.insert(0, '/usr/lib/python3/dist-packages')
 from x86_host_init import BASE, cli, marker, mount, require_qemu
+from x86_lockdep import read_debug_locks, child_final
 
 
 def snapshot():
@@ -82,6 +83,7 @@ def main(extra_handler=None, *, profile='nested'):
         os.close(fd)
     state = snapshot()
     marker('CHILD_ALIVE', pid=1, instance=1, physical_cpus=state['online_cpus'],
+           debug_locks=read_debug_locks(),
            online=Path('/sys/devices/system/cpu/online').read_text().strip(),
            boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip())
     try:
@@ -89,6 +91,8 @@ def main(extra_handler=None, *, profile='nested'):
             fields = line.strip().split(maxsplit=2)
             if len(fields) == 2 and fields[0] == 'ping':
                 marker('CHILD_REPLY', nonce=fields[1])
+            elif len(fields) == 2 and fields[0] == 'lockdep':
+                child_final(marker, fields[1])
             elif len(fields) == 3 and fields[0] == 'nested':
                 nested(fields[1], int(fields[2]))
             elif extra_handler and len(fields) == 3 and fields[0] == 'process':

@@ -14,6 +14,7 @@ import time
 
 sys.path.insert(0, '/usr/lib/python3/dist-packages')
 from x86_host_init import BASE, NAME, cli, marker, mount, ownership, require_qemu, status, capture_tail
+from x86_lockdep import read_debug_locks, probe_child
 
 # Terminal registry tests explicitly retain the child and discard the VM.
 TERMINAL_CAPTURE = object()
@@ -29,7 +30,8 @@ def workload(after_nested=None, *, profile='nested', after_halt=None, after_unlo
     if len(set(host + child + spare)) != 8:
         raise RuntimeError('physical topology aliases')
     marker('NESTED_BEGIN', host_cpus=host, child_cpus=child, spare_cpus=spare,
-           revision=Path('/payload/source-revision').read_text().strip())
+           revision=Path('/payload/source-revision').read_text().strip(),
+           debug_locks=read_debug_locks())
     cli('init', '--cpus=' + ','.join(map(str, child + spare)),
         '--memory=768MB', '--devices=none')
     if Path('/sys/devices/system/cpu/online').read_text().strip() != '0-2':
@@ -93,6 +95,7 @@ def workload(after_nested=None, *, profile='nested', after_halt=None, after_unlo
             if pending is TERMINAL_CAPTURE:
                 return
         else:
+            pending = probe_child(fd, pending, nonce)
             cli('kill', NAME)
         pending = capture_tail(fd, pending)
         if pending:
@@ -107,6 +110,7 @@ def workload(after_nested=None, *, profile='nested', after_halt=None, after_unlo
         if after_unload:
             pending = after_unload(fd, pending, nonce, child, spare)
         marker('NESTED_HOST_SURVIVED',
+               debug_locks=read_debug_locks(),
                online=Path('/sys/devices/system/cpu/online').read_text().strip(),
                boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip())
         qualification = 'native-registry-replace' if profile == 'registry' else 'native-' + profile

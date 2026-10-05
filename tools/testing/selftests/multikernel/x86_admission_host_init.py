@@ -14,6 +14,7 @@ import time
 sys.path.insert(0, '/usr/lib/python3/dist-packages')
 from x86_host_init import BASE, NAME, marker, ownership, status
 from x86_nested_host_init import main
+from x86_lockdep import probe_child
 
 
 class Operation:
@@ -182,6 +183,7 @@ def admission(fd, pending, nonce, child, spare):
     console.wait('ADMISSION_DRAIN_WAITING')
     if not halt.thread.is_alive():
         raise RuntimeError('shutdown returned before accepted worker retired')
+    console.pending = probe_child(fd, console.pending, nonce)
     # No reply is required: the real shutdown may stop PID1 immediately.
     console.send('release')
     halt.finish()

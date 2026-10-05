@@ -48,6 +48,16 @@ Run all test_*.py via Python unittest discovery and the existing *_test.sh
 runners. test_verify_x86_nested.py exercises false-pass evidence mutations;
 its fabricated trace is a verifier unit test, never native qualification.
 
+All profiles require the four live debug_locks boundary samples documented in
+README.x86-native. Child final sampling follows the tested child-side work:
+RCU/registry completion, MKTTY reconnect/health, or nested-pool retirement.
+Admission samples after observing the genuine drain wait and before releasing
+accepted work toward shutdown. Writer/destruction sample the child before
+halt, then sample the host after their host-only reclamation work. Terminal
+registry cleanup still samples the live child but never attempts normal halt.
+Host final sampling follows each profile's last operation. This does not turn
+endpoint samples into PREEMPT_RT, continuous lockdep or hardware proof.
+
 Second gate: native process admission and timeout drain
 ------------------------------------------------------
 

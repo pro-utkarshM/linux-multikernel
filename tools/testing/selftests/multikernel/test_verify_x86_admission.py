@@ -98,12 +98,14 @@ class AdmissionGate(unittest.TestCase):
         closed = native(6)
         mark('ADMISSION_DRAIN_WAITING', closed=closed, held=held, active=True,
              drain_sleeping=True)
+        result.append(lines[7].splitlines(keepends=True)[0])
         native(10, 105, 6, operation=8193)
         native(5, 105, 6, operation=8193)
         native(7)
         mark('ADMISSION_COMPLETE', status='loaded', assigned_cpus=[3, 4, 5, 6])
+        tail = [lines[7].splitlines(keepends=True)[1]] + lines[8:]
         result.extend(line.replace('"assigned_cpus": [3, 4, 5]', '"assigned_cpus": [3, 4, 5, 6]')
-                      .replace('nested-pool-prerequisite', 'native-admission') for line in lines[7:])
+                      .replace('nested-pool-prerequisite', 'native-admission') for line in tail)
         return result
 
     def test_complete_literal_is_accepted(self):

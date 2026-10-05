@@ -10,6 +10,7 @@ sys.path.insert(0, '/usr/lib/python3/dist-packages')
 from x86_host_init import NAME, cli, marker
 from x86_nested_host_init import main
 from x86_admission_host_init import Console
+from x86_lockdep import probe_child
 
 GATE = Path('/sys/kernel/debug/mk-native-concurrency-test')
 
@@ -46,6 +47,7 @@ def rcu(fd, pending, nonce, child, spare):
     console.command('rcu')
     final = wait(complete, 8)
     marker('RCU_COMPLETE', nonce=nonce, state=final)
+    console.pending = probe_child(fd, console.pending, nonce)
     cli('kill', NAME)
     return console.pending
 

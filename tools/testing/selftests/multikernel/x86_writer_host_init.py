@@ -12,6 +12,7 @@ sys.path.insert(0, '/usr/lib/python3/dist-packages')
 from x86_host_init import NAME, cli, marker
 from x86_nested_host_init import main
 from x86_admission_host_init import Operation
+from x86_lockdep import probe_child
 
 GATE = Path('/sys/kernel/debug/mk-native-concurrency-test')
 
@@ -29,6 +30,7 @@ def wait(predicate, seconds):
 
 
 def stop(fd, pending, nonce, child, spare):
+    pending = probe_child(fd, pending, nonce)
     cli('kill', NAME)
     return pending
 

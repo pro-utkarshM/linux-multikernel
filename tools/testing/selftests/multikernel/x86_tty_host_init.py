@@ -11,6 +11,7 @@ sys.path.insert(0, '/usr/lib/python3/dist-packages')
 from x86_host_init import NAME, cli, marker
 from x86_nested_host_init import main
 from x86_admission_host_init import Console, Operation
+from x86_lockdep import probe_child
 
 GATE = Path('/sys/kernel/debug/mk-native-concurrency-test')
 
@@ -84,6 +85,7 @@ def tty(fd, pending, nonce, child, spare):
         raise RuntimeError('short reconnect selection')
     console = Console(fd, bytearray(), nonce)
     capture_log(console)
+    console.pending = probe_child(fd, console.pending, nonce)
     cli('kill', NAME)
     return console.pending
 

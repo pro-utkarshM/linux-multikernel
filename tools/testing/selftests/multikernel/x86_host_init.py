@@ -17,6 +17,8 @@ import subprocess
 import sys
 import termios
 import time
+sys.path.insert(0, '/usr/lib/python3/dist-packages')
+from x86_lockdep import read_debug_locks, probe_child
 
 BASE = Path('/sys/fs/multikernel')
 NAME = 'native-child'
@@ -195,7 +197,8 @@ def workload():
                           for group in ((0, 1), (2, 3), (4, 5)))
     assert len(set(host + child + spare)) == 6
     marker('BEGIN', host_cpus=host, child_cpus=child, spare_cpus=spare,
-           revision=Path('/payload/source-revision').read_text().strip())
+           revision=Path('/payload/source-revision').read_text().strip(),
+           debug_locks=read_debug_locks())
     cli('init', '--cpus=' + ','.join(map(str, child + spare)),
         '--memory=768MB', '--devices=none')
     assert Path('/sys/devices/system/cpu/online').read_text().strip() == '0-1'
@@ -241,6 +244,7 @@ def workload():
                     reply = True
         if not reply:
             raise RuntimeError('real child handshake timed out')
+        pending = probe_child(fd, pending, nonce)
         if halt.endswith('-retain'):
             failed_retention(child, fd, halt.removesuffix('-retain'))
         elif halt == 'force':
@@ -262,6 +266,7 @@ def workload():
         cli('unload', NAME)
         marker('UNLOADED', status=status('ready'), assigned_cpus=ownership())
         marker('HOST_SURVIVED',
+               debug_locks=read_debug_locks(),
                online=Path('/sys/devices/system/cpu/online').read_text().strip(),
                boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip())
         marker('PASS', slice='executing-child-boot')
