@@ -2039,7 +2039,7 @@ config MK_X86_NATIVE_CONFIRM_TEST
 	help
 	  Disposable VM qualification only. An additional explicit boot parameter
 	  and recognized QEMU q35 DMI identity are required for activation.
-	  enables a root-only debugfs selector and allocation snapshot. Selecting
+	  The option enables a root-only debugfs selector and snapshot. Selecting
 	  one physical CPU makes stop confirmation fail without changing its park
 	  state. Do not include this option or file in a production submission.
 

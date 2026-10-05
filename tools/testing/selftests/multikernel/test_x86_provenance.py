@@ -7,6 +7,7 @@ from pathlib import Path
 import tempfile
 import sys
 import unittest
+from unittest.mock import patch
 
 HERE = Path(__file__).resolve().parent
 REVISION = '1234567890abcdef1234567890abcdef12345678'
@@ -21,8 +22,13 @@ def load(name):
 
 class X86Provenance(unittest.TestCase):
     def test_preflight_disables_bytecode_writes(self):
-        load('prepare_x86_child')
-        self.assertTrue(sys.dont_write_bytecode)
+        path = HERE / 'prepare_x86_child.py'
+        # Exercise the script body as __main__ would, not import-loader caching.
+        # Starting Python with -B must not make this assertion vacuous.
+        namespace = {'__file__': str(path), '__name__': 'preflight_bytecode_check'}
+        with patch.object(sys, 'dont_write_bytecode', False):
+            exec(compile(path.read_text(), str(path), 'exec'), namespace)
+            self.assertTrue(sys.dont_write_bytecode)
 
     def test_qemu_guard_rejects_missing_and_bare_metal_identity(self):
         host = load('x86_host_init')
