@@ -2,6 +2,7 @@
 /* Test-only VM instrumentation. Never include in the production series. */
 #include <linux/debugfs.h>
 #include <linux/atomic.h>
+#include <linux/dmi.h>
 #include <linux/init.h>
 #include <linux/limits.h>
 #include <linux/module.h>
@@ -11,6 +12,7 @@
 #include <linux/string.h>
 
 static bool enabled;
+static bool safe_vm;
 static u64 fail_cpu = U64_MAX;
 static atomic64_t failure_count = ATOMIC64_INIT(0);
 
@@ -25,7 +27,7 @@ __setup("mk_native_confirm_test=", mk_native_confirm_setup);
 bool mk_x86_native_confirm_failure(u64 phys_cpu)
 {
 	/* Compare the physical ID directly: never use it as an array index. */
-	if (!enabled || !mk_self || mk_self->id ||
+	if (!enabled || !safe_vm || !mk_self || mk_self->id ||
 	    phys_cpu != READ_ONCE(fail_cpu))
 		return false;
 	pr_info("MK_X86_TEST_CONFIRM_FAIL phys=%llu\n", phys_cpu);
@@ -68,6 +70,12 @@ static int __init native_confirm_init(void)
 
 	if (!enabled || !mk_self || mk_self->id)
 		return 0;
+	if (!dmi_match(DMI_SYS_VENDOR, "QEMU") ||
+	    !dmi_match(DMI_PRODUCT_NAME, "Standard PC (Q35 + ICH9, 2009)")) {
+		pr_warn("MK_X86_TEST_CONFIRM_REFUSED: not the QEMU q35 lane\n");
+		return 0;
+	}
+	safe_vm = true;
 	directory = debugfs_create_dir("mk-native-confirm-test", NULL);
 	if (IS_ERR(directory))
 		return PTR_ERR(directory);

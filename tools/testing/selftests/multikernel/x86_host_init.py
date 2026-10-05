@@ -23,6 +23,16 @@ HALT_MODES = ('requested', 'force', 'poweroff', 'reboot')
 HALT_LANES = HALT_MODES + tuple(mode + '-retain' for mode in HALT_MODES)
 
 
+def require_qemu(identity=Path('/sys/class/dmi/id')):
+    try:
+        vendor = (identity / 'sys_vendor').read_text().strip()
+        product = (identity / 'product_name').read_text().strip()
+    except OSError as error:
+        raise RuntimeError('missing QEMU q35 identity; refusing resource operations') from error
+    if vendor != 'QEMU' or product != 'Standard PC (Q35 + ICH9, 2009)':
+        raise RuntimeError('not the disposable QEMU q35 lane; refusing resource operations')
+
+
 def marker(name, **fields):
     print('MK_X86_' + name + ' ' + json.dumps(fields, sort_keys=True), flush=True)
 
@@ -92,6 +102,10 @@ def failed_retention(child, console, mode):
             if time.monotonic() >= deadline:
                 raise RuntimeError('voluntary failed-confirmation worker never ran')
             time.sleep(0.05)
+    failures_after = int((fault / 'failures').read_text())
+    assert failures_after > failures_before
+    marker('CONFIRM_FAILURE_OBSERVED', before=failures_before,
+           after=failures_after, cpu=child[-1])
     status('active')
     unload_errno = rejected(lambda: kexec_file_unload(
         KEXEC_MULTIKERNEL | KEXEC_MK_ID(1) | KEXEC_FILE_UNLOAD))
@@ -220,6 +234,7 @@ def main():
     if 'mk_test=x86-host' not in Path('/proc/cmdline').read_text().split():
         raise RuntimeError('missing explicit host guest boot guard')
     mount('sysfs', '/sys', 'sysfs')
+    require_qemu()
     mount('devtmpfs', '/dev', 'devtmpfs')
     mount('none', str(BASE), 'multikernel')
     if 'mk_native_confirm_test=1' in Path('/proc/cmdline').read_text().split():

@@ -14,8 +14,15 @@ libfdt/_libfdt, BusyBox at /usr/lib/initcpio/busybox, cpio, gzip and QEMU x86.
 It reports missing prerequisites instead of installing them. Run it only with
 clean dependency checkouts and a clean kernel source at the built revision.
 
-Build the same-source x86 GCC vmlinux/bzImage with x86_child.config requirements.
-Do not overwrite historical build directories. Example (explicit paths):
+Use x86_child.config requirements in a fresh build directory's .config, then
+build with the same-source GCC wrapper. It records the explicit clean source
+revision/tree, build command, stable config and both resulting binary hashes in
+mk-x86-build.json only after a successful build. Packaging refuses missing,
+stale or mismatched proof. Do not overwrite historical builds or proof files.
+Example (explicit paths):
+
+  python3 -B build_x86_child.py --source "$source" \
+    --kernel-build "$build" --jobs=4
 
   python3 prepare_x86_child.py --prepare --revision "$revision" \
     --source "$source" --kernel-build "$build" \
@@ -36,7 +43,13 @@ Boot ONLY in a disposable VM, never on the machine running these tests:
 
 Capture the complete command, QEMU version, raw serial output and actual timeout
 exit code. Both VM exit and verifier must succeed; do not let tee hide failures.
-Run the frozen bundle's verify_x86_child.py and the Python verifier unit suite.
+Run the frozen verifier with an independently pinned source revision and input
+bundle; it checks build-bound binaries/config and the frozen manifest too:
+
+  python3 -B "$bundle/verify_x86_child.py" --bundle "$bundle" \
+    --revision "$revision" --halt=requested "$serial_log"
+
+Run both test_verify_x86_child.py and test_x86_provenance.py unit suites.
 Hash evidence separately after copying it; the original input bundle manifest
 does not attest output logs added after launch.
 
@@ -62,6 +75,14 @@ CPUs before confirmation. Voluntary lanes send a mktty userspace command to
 the child and wait for confirmed settlement; they do not call host poweroff or
 reboot until all assertions have run. A pass in these lanes does not prove
 failed-confirmation retention or callback/concurrency safety.
+Healthy nonforce lanes reject NMI settlement; every retention lane requires a
+separate recovery NMI after clearing the selector. Failure observation, specific
+destruction refusal and allocation snapshots must occur in their intended order.
+
+Both init recipes and kernel instrumentation require the recognized QEMU q35
+DMI identity in addition to PID1/architecture and explicit boot guards. This
+prevents accidental use on ordinary bare metal, not malicious identity spoofing
+or proof that an arbitrary VM is disposable. Use only the documented local lane.
 
 Stop-confirmation failure lane (test branch only): build a separate kernel with
 CONFIG_MK_X86_NATIVE_CONFIRM_TEST=y; never add it to production. Append HOST

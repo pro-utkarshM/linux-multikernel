@@ -19,6 +19,7 @@ import sys
 import sysconfig
 import tempfile
 
+sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
 HARNESS_REV = '48507f176520b11a655344510b1b865b037e527f'
 KERF_REV = '38daa5687d6748846ffd003599a3bfba29785cd6'
@@ -31,6 +32,18 @@ def command(*args):
 def digest(path):
     with open(path, 'rb') as stream:
         return hashlib.file_digest(stream, 'sha256').hexdigest()
+
+
+def validate_build_proof(build, revision):
+    proof = json.loads((build / 'mk-x86-build.json').read_text())
+    required = ('.config', 'vmlinux', 'arch/x86/boot/bzImage')
+    if (proof.get('schema') != 1 or proof.get('revision') != revision
+            or proof.get('build_exit') != 0
+            or not re.fullmatch(r'[0-9a-f]{40}', proof.get('source_tree', ''))
+            or set(proof.get('artifacts', {})) != set(required)
+            or any(digest(build / name) != proof['artifacts'][name] for name in required)):
+        raise RuntimeError('missing, stale or mismatched build-time provenance')
+    return proof
 
 
 def dependencies(paths):
@@ -99,8 +112,14 @@ def main():
     runtime_libraries = dependencies([python, busybox, Path(extension.__file__),
                                       *sorted((stdlib / 'lib-dynload').glob('*.so'))])
     source_head = command('git', '-C', str(args.source), 'rev-parse', 'HEAD')
+    proof = validate_build_proof(args.kernel_build, source_head)
+    if (Path(proof['source']).resolve() != args.source.resolve()
+            or proof['source_tree'] != command('git', '-C', str(args.source),
+                                               'rev-parse', 'HEAD^{tree}')):
+        raise RuntimeError('build provenance names a different source checkout or tree')
     inputs = [args.kernel_build / 'arch/x86/boot/bzImage', args.kernel_build / 'vmlinux',
-              config, HERE / 'x86_host_init.py', HERE / 'x86_child_init.py',
+              config, args.kernel_build / 'mk-x86-build.json',
+              HERE / 'x86_host_init.py', HERE / 'x86_child_init.py',
               HERE / 'verify_x86_child.py', HERE / 'x86_child.config', Path(__file__).resolve()]
     hashes = {str(path.resolve()): digest(path) for path in inputs}
     print(json.dumps({'mode': 'prepare' if args.prepare else 'HOST_DRY_RUN_ONLY',
@@ -170,6 +189,7 @@ def main():
     install(args.kernel_build / 'vmlinux', 'payload/vmlinux')
     shutil.copy2(args.kernel_build / 'arch/x86/boot/bzImage', bundle / 'bzImage')
     shutil.copy2(config, bundle / 'kernel.config')
+    shutil.copy2(args.kernel_build / 'mk-x86-build.json', bundle / 'mk-x86-build.json')
     if any(digest(Path(path)) != expected for path, expected in hashes.items()):
         raise RuntimeError('inputs changed while preparing; partial output preserved')
     if command('git', '-C', str(args.source), 'rev-parse', 'HEAD') != args.revision:

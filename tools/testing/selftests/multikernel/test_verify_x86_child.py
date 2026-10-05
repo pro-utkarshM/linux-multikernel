@@ -7,6 +7,8 @@ import inspect
 from pathlib import Path
 import unittest
 
+REVISION = 'c958d01f54750000000000000000000000000000'
+
 
 class X86ChildGate(unittest.TestCase):
     def verify(self, trace, halt=None):
@@ -19,8 +21,8 @@ class X86ChildGate(unittest.TestCase):
         if halt is not None:
             self.assertIn('halt', inspect.signature(module.verify).parameters,
                           'verifier cannot distinguish forced/voluntary halt evidence')
-            return module.verify(trace, halt=halt)
-        return module.verify(trace)
+            return module.verify(trace, halt=halt, expected_revision=REVISION)
+        return module.verify(trace, expected_revision=REVISION)
 
     def trace(self):
         def event(name, **fields):
@@ -34,7 +36,7 @@ class X86ChildGate(unittest.TestCase):
             event('PING', nonce='1234567890abcdef'),
             event('CHILD_REPLY', nonce='1234567890abcdef'),
             'Instance 1 (native-child) halted, all CPUs confirmed parked\n',
-            event('HALTED', status='loaded', assigned_cpus=[2, 3]),
+            event('HALTED', mode='requested', status='loaded', assigned_cpus=[2, 3]),
             event('UNLOADED', status='ready', assigned_cpus=[2, 3]),
             event('HOST_SURVIVED', online='0-1', boot_id='62c2429a-bf11-48d8-b06f-7442b072e625'),
             event('PASS', slice='executing-child-boot'),
@@ -80,7 +82,7 @@ class X86ChildGate(unittest.TestCase):
     def test_force_halt_requires_nmi_to_both_cpus_before_confirmation(self):
         trace = self.trace()
         trace[4] = 'Sent NMI to 2 CPUs in instance 1\n' + trace[4]
-        trace[5] = trace[5].replace('"status":', '"mode": "force", "status":')
+        trace[5] = trace[5].replace('"mode": "requested"', '"mode": "force"')
         self.assertEqual(self.verify(''.join(trace), halt='force'), [])
         self.assertTrue(self.verify(''.join(trace).replace('NMI to 2', 'NMI to 1'),
                                     halt='force'))
@@ -90,7 +92,7 @@ class X86ChildGate(unittest.TestCase):
             trace = self.trace()
             trace[4] = ('MK_X86_TERMINATION_REQUEST ' + json.dumps({'mode': halt})
                         + '\n' + trace[4])
-            trace[5] = trace[5].replace('"status":', f'"mode": "{halt}", "status":')
+            trace[5] = trace[5].replace('"mode": "requested"', f'"mode": "{halt}"')
             self.assertEqual(self.verify(''.join(trace), halt=halt), [])
             self.assertTrue(self.verify(''.join(self.trace()), halt=halt))
 
@@ -104,17 +106,19 @@ class X86ChildGate(unittest.TestCase):
                     'unload_errno': 16, 'destroy_status': 'failed', 'destroy_transaction': 3,
                     'allocations_before': allocations, 'allocations_after': allocations}
         mode = halt.removesuffix('-retain')
-        request = ('Sent NMI to 2 CPUs in instance 1\n' if mode == 'force' else
-                   'MK_X86_RETENTION_HALT_REQUEST ' + json.dumps({'mode': mode}) + '\n')
+        request = 'MK_X86_RETENTION_HALT_REQUEST ' + json.dumps({'mode': mode}) + '\n'
+        if mode == 'force':
+            request += 'Sent NMI to 2 CPUs in instance 1\n'
         if mode in ('poweroff', 'reboot'):
             request += 'MK_X86_TERMINATION_REQUEST ' + json.dumps({'mode': mode}) + '\n'
         trace[4] = (request +
                     'MK_X86_TEST_CONFIRM_FAIL phys=3\n'
+                    'MK_X86_CONFIRM_FAILURE_OBSERVED {"before":0,"after":1,"cpu":3}\n'
                     "Overlay tx3: Failed to remove instance 'native-child': -16\n"
                     'MK_X86_RETAINED ' + json.dumps(retained) + '\n'
                     'MK_X86_CONFIRM_FAULT_CLEAR {"cpu":3}\n'
                     'Sent NMI to 2 CPUs in instance 1\n' + trace[4])
-        trace[5] = trace[5].replace('"status":', f'"mode": "{halt}", "status":')
+        trace[5] = trace[5].replace('"mode": "requested"', f'"mode": "{halt}"')
         return ''.join(trace)
 
     def test_failed_confirmation_retains_every_allocation_and_refuses_reclaim(self):
@@ -137,6 +141,49 @@ class X86ChildGate(unittest.TestCase):
             with self.subTest(new=new):
                 self.assertTrue(self.verify(self.retention_trace().replace(old, new),
                                             halt='force-retain'))
+
+    def test_reject_wrong_source_pin_and_malformed_identity(self):
+        for old, new in ((REVISION, '0' * 40), ('"pid": 1', '"pid": true'),
+                         ('"instance": 1', '"instance": true'),
+                         ('"mode": "requested", ', ''),
+                         ('"nonce": "1234567890abcdef"', '"nonce": 1234567890123456')):
+            with self.subTest(new=new):
+                self.assertTrue(self.verify(''.join(self.trace()).replace(old, new)))
+
+    def test_healthy_nonforce_lane_rejects_nmi(self):
+        for halt in ('requested', 'poweroff', 'reboot'):
+            trace = self.trace()
+            trace[5] = trace[5].replace('"mode": "requested"', f'"mode": "{halt}"')
+            trace[4] = 'Sent NMI to 2 CPUs in instance 1\n' + trace[4]
+            if halt != 'requested':
+                trace[4] = ('MK_X86_TERMINATION_REQUEST ' + json.dumps({'mode': halt})
+                            + '\n' + trace[4])
+            self.assertTrue(self.verify(''.join(trace), halt=halt))
+
+    def test_force_retention_requires_separate_recovery_nmi(self):
+        trace = self.retention_trace()
+        first, separator, rest = trace.partition('Sent NMI to 2 CPUs in instance 1\n')
+        self.assertTrue(self.verify(first + separator + rest.replace(
+            'Sent NMI to 2 CPUs in instance 1\n', ''), halt='force-retain'))
+
+    def test_voluntary_retention_request_must_precede_worker_failure(self):
+        trace = self.retention_trace('poweroff-retain')
+        request = 'MK_X86_TERMINATION_REQUEST {"mode": "poweroff"}\n'
+        trace = trace.replace(request, '') + request
+        self.assertTrue(self.verify(trace, halt='poweroff-retain'))
+        trace = self.retention_trace('poweroff-retain').replace(
+            'MK_X86_CONFIRM_FAILURE_OBSERVED', 'OTHER_EVENT')
+        self.assertTrue(self.verify(trace, halt='poweroff-retain'))
+
+    def test_destruction_refusal_must_precede_retention_snapshot(self):
+        trace = self.retention_trace()
+        refusal = "Overlay tx3: Failed to remove instance 'native-child': -16\n"
+        self.assertTrue(self.verify(trace.replace(refusal, '') + refusal, halt='force-retain'))
+
+    def test_physical_fault_id_requires_a_complete_decimal_field(self):
+        for suffix in ('-OTHER', '.0'):
+            trace = self.retention_trace().replace('phys=3\n', 'phys=3' + suffix + '\n')
+            self.assertTrue(self.verify(trace, halt='force-retain'))
 
 
 if __name__ == '__main__':

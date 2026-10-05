@@ -31,6 +31,10 @@ def main():
     if 'mk_test=x86-child' not in Path('/proc/cmdline').read_text().split():
         raise RuntimeError('missing child boot guard')
     mount('sysfs', '/sys', 'sysfs')
+    if (Path('/sys/class/dmi/id/sys_vendor').read_text().strip() != 'QEMU'
+            or Path('/sys/class/dmi/id/product_name').read_text().strip()
+            != 'Standard PC (Q35 + ICH9, 2009)'):
+        raise RuntimeError('not the disposable QEMU q35 child lane')
     mount('devtmpfs', '/dev', 'devtmpfs')
     sys.path.insert(0, '/usr/lib/python3/dist-packages')
     from kerf.topology import logical_to_apic

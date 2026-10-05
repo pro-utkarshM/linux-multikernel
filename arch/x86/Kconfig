@@ -2034,10 +2034,11 @@ config ARCH_HAS_MK_FORCE_STOP
 
 config MK_X86_NATIVE_CONFIRM_TEST
 	bool "Test-only multikernel stop-confirmation failure injection"
-	depends on X86_64 && MULTIKERNEL && DEBUG_FS
+	depends on X86_64 && MULTIKERNEL && DEBUG_FS && DMI
 	default n
 	help
 	  Disposable VM qualification only. An additional explicit boot parameter
+	  and recognized QEMU q35 DMI identity are required for activation.
 	  enables a root-only debugfs selector and allocation snapshot. Selecting
 	  one physical CPU makes stop confirmation fail without changing its park
 	  state. Do not include this option or file in a production submission.
