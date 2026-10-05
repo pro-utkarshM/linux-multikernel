@@ -17,6 +17,20 @@ REQUIRED_CONFIG = frozenset({
 })
 
 
+def decode_record(text):
+    def unique_fields(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError('duplicate live lockdep JSON field: ' + key)
+            result[key] = value
+        return result
+    value = json.loads(text, object_pairs_hook=unique_fields)
+    if not isinstance(value, dict):
+        raise ValueError('live lockdep record is not an object')
+    return value
+
+
 def read_debug_locks(path=Path('/proc/lockdep_stats')):
     fields = [line.strip() for line in path.read_text().splitlines()
               if re.match(r'\s*debug_locks\s*:', line)]
@@ -50,8 +64,11 @@ def probe_child(fd, pending, nonce):
             if text.startswith('MK_X86_FAIL '):
                 raise RuntimeError('child failure during live lockdep probe')
             if text.startswith('MK_X86_CHILD_LOCKDEP_FINAL '):
-                value = json.loads(text.partition(' ')[2])
-                if (not isinstance(value, dict) or value.get('nonce') != nonce
+                try:
+                    value = decode_record(text.partition(' ')[2])
+                except ValueError as error:
+                    raise RuntimeError('invalid live lockdep reply') from error
+                if (value.get('nonce') != nonce
                         or type(value.get('debug_locks')) is not int or value['debug_locks'] != 1):
                     raise RuntimeError('uncorrelated or disabled child lockdep')
                 if sys.stdout.isatty():
@@ -79,9 +96,7 @@ def verify_boundaries(trace, begin, end, after, *, terminal=False, before=None):
             matches = list(re.finditer(r'^MK_X86_' + name + r' (.*)$', trace, re.M))
             if len(matches) != 1:
                 raise ValueError(name + ': missing or duplicate live lockdep boundary')
-            value = json.loads(matches[0][1])
-            if not isinstance(value, dict):
-                raise ValueError(name + ': invalid live lockdep boundary')
+            value = decode_record(matches[0][1])
             return matches[0].start(), value
         samples = [one(name) for name in (begin, 'CHILD_ALIVE', 'CHILD_LOCKDEP_FINAL', end)]
         for _, value in samples:

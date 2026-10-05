@@ -180,10 +180,12 @@ def admission(fd, pending, nonce, child, spare):
            unload_errno=unload_errno, instance_status=status('active'))
     halt = Operation(lambda: halt_multikernel(1, force=False))
     console.send('drain')
-    console.wait('ADMISSION_DRAIN_WAITING')
+    waiting = console.wait('ADMISSION_DRAIN_WAITING')
     if not halt.thread.is_alive():
         raise RuntimeError('shutdown returned before accepted worker retired')
     console.pending = probe_child(fd, console.pending, nonce)
+    marker('ADMISSION_RELEASE_REQUEST', nonce=nonce, request=waiting['held']['request'],
+           cpu=waiting['held']['cpu'])
     # No reply is required: the real shutdown may stop PID1 immediately.
     console.send('release')
     halt.finish()

@@ -55,7 +55,8 @@ def verify(trace, expected_revision=None):
         expected_names += [('ADMISSION_BEGIN', 'timeout-drain'),
                            ('ADMISSION_HELD', 'timeout-drain'),
                            ('ADMISSION_TIMEOUT_RETAINED', None),
-                           ('ADMISSION_DRAIN_WAITING', None), ('ADMISSION_COMPLETE', None)]
+                           ('ADMISSION_DRAIN_WAITING', None), ('ADMISSION_RELEASE_REQUEST', None),
+                           ('ADMISSION_COMPLETE', None)]
         if [(n, v.get('mode')) for n, v, _ in marks] != expected_names:
             raise ValueError('missing, extra or reordered admission phase markers')
         retired_at = [p for n, _, p in records if n == 'NESTED_POOL_RETIRED']
@@ -185,6 +186,15 @@ def verify(trace, expected_revision=None):
         if entered['seq'] <= last:
             raise ValueError('timeout case reused earlier worker')
         leave = checkpoint(10, enter['request'], spare[0], 8193)
+        release = one('ADMISSION_RELEASE_REQUEST')
+        if (any(type(release.get(key)) is not int or release[key] != enter[key]
+                for key in ('request', 'cpu'))):
+            raise ValueError('lockdep pre-release marker does not match held worker')
+        release_at = [p for n, _, p in records if n == 'ADMISSION_RELEASE_REQUEST'][0]
+        leave_at = [p for n, v, p in records if n == 'NATIVE' and v.get('instance') == 1
+                    and v.get('seq') == leave['seq']][0]
+        if release_at >= leave_at:
+            raise ValueError('lockdep pre-release marker follows actual worker release')
         waiting = one('ADMISSION_DRAIN_WAITING')
         closed = observed(waiting['closed'])
         drained = checkpoint(7)

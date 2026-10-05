@@ -99,6 +99,7 @@ class AdmissionGate(unittest.TestCase):
         mark('ADMISSION_DRAIN_WAITING', closed=closed, held=held, active=True,
              drain_sleeping=True)
         result.append(lines[7].splitlines(keepends=True)[0])
+        mark('ADMISSION_RELEASE_REQUEST', request=105, cpu=6)
         native(10, 105, 6, operation=8193)
         native(5, 105, 6, operation=8193)
         native(7)

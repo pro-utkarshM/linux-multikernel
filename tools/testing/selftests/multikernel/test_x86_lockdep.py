@@ -24,6 +24,24 @@ def final_marker():
 
 
 class LockdepEvidence(unittest.TestCase):
+    def test_duplicate_json_key_cannot_hide_disabled_value(self):
+        for fixture, text in self.samples():
+            for line in text.splitlines(keepends=True):
+                if '"debug_locks": 1' in line:
+                    self.assertTrue(fixture.verify(text.replace(line, line.replace(
+                        '"debug_locks": 1', '"debug_locks": 0, "debug_locks": 1'))))
+
+    def test_admission_sample_must_precede_worker_release(self):
+        import test_verify_x86_admission as fixture_module
+        fixture = fixture_module.AdmissionGate()
+        lines = fixture.trace()
+        final = next(line for line in lines if line.startswith('MK_X86_CHILD_LOCKDEP_FINAL '))
+        lines.remove(final)
+        late = next(index for index, line in enumerate(lines)
+                    if line.startswith('MK_X86_ADMISSION_COMPLETE '))
+        lines.insert(late, final)
+        self.assertTrue(fixture.verify(''.join(lines)), 'post-release lockdep sample accepted')
+
     def samples(self):
         for fixture in (halt_fixture.X86ChildGate(), nested_fixture.NestedPoolGate()):
             lines = []
@@ -107,6 +125,7 @@ class LockdepEvidence(unittest.TestCase):
                              (final_marker().replace(NONCE, 'fedcba0987654321'), False),
                              (final_marker().replace('"debug_locks": 1', '"debug_locks": 0'), False),
                              (final_marker().replace('"debug_locks": 1', '"debug_locks": true'), False),
+                             (final_marker().replace('"debug_locks": 1', '"debug_locks": 0, "debug_locks": 1'), False),
                              ('MK_X86_FAIL {"error":"lockdep disabled"}\n', False)):
             with contextlib.ExitStack() as stack:
                 local, remote = socket.socketpair()
