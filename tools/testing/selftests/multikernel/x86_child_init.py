@@ -57,6 +57,9 @@ def main():
             marker('CHILD_REPLY', nonce=fields[1])
         elif len(fields) == 2 and fields[0] == 'lockdep':
             child_final(marker, fields[1])
+        elif len(fields) == 2 and fields[0] == 'reonline':
+            from x86_reonline import child_probe
+            child_probe(fields[1], marker)
         elif len(fields) == 2 and fields[0] == 'terminate' and fields[1] in ('poweroff', 'reboot'):
             os.sync()
             command = 0x4321FEDC if fields[1] == 'poweroff' else 0x01234567

@@ -244,6 +244,9 @@ def workload():
                     reply = True
         if not reply:
             raise RuntimeError('real child handshake timed out')
+        if options.get('mk_x86_reonline') == '1':
+            from x86_reonline import host_probe
+            pending = host_probe(fd, pending, nonce, marker)
         pending = probe_child(fd, pending, nonce)
         if halt.endswith('-retain'):
             failed_retention(child, fd, halt.removesuffix('-retain'))

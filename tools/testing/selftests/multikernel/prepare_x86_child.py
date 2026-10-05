@@ -127,7 +127,7 @@ def main():
               config, args.kernel_build / 'mk-x86-build.json',
               HERE / 'x86_host_init.py', HERE / 'x86_child_init.py',
               HERE / 'verify_x86_child.py', HERE / 'x86_child.config',
-              HERE / 'x86_lockdep.py', Path(__file__).resolve()]
+              HERE / 'x86_lockdep.py', HERE / 'x86_reonline.py', Path(__file__).resolve()]
     if args.profile != 'halt':
         inputs += [HERE / 'x86_nested_host_init.py', HERE / 'x86_nested_child_init.py',
                    HERE / 'verify_x86_nested.py']
@@ -190,6 +190,7 @@ def main():
         install(library, str(library).lstrip('/'))
     install(host_init, 'init')
     install(HERE / 'x86_lockdep.py', 'usr/lib/python3/dist-packages/x86_lockdep.py')
+    install(HERE / 'x86_reonline.py', 'usr/lib/python3/dist-packages/x86_reonline.py')
     if args.profile != 'halt':
         install(HERE / 'x86_host_init.py', 'usr/lib/python3/dist-packages/x86_host_init.py')
     if args.profile in ('admission', 'rcu', 'registry', 'tty', 'writer', 'destroy'):
