@@ -23,6 +23,7 @@ def verify(trace, expected_revision=None):
     errors, events, positions = [], {}, {}
     if re.search(r'MK_X86_FAIL|Kernel panic - not syncing:|WARNING:|BUG:|Sent NMI to'
                  r'|general protection fault|Oops:|detected (?:expedited )?stalls'
+                 r'|fault while parked'
                  r'|watchdog:.*lockup|rcu:.*(?:self-detected stall|kthread starved)',
                  trace, re.I):
         errors.append('fault, warning or forced recovery in prerequisite trace')

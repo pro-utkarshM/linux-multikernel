@@ -91,6 +91,7 @@ class NestedPoolGate(unittest.TestCase):
                       'general protection fault, probably for non-canonical address\n',
                       'Oops: invalid opcode: 0000 [#1]\n',
                       'rcu: INFO: rcu_preempt detected stalls on CPUs/tasks:\n',
+                      'multikernel: fault while parked, CPU halted\n',
                       'Sent NMI to 3 CPUs in instance 1\n'):
             self.assertTrue(self.verify(''.join(self.trace()) + error))
 
