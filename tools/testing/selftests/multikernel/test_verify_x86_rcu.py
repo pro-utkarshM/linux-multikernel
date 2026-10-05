@@ -8,6 +8,14 @@ import unittest
 
 
 class NativeRcuOracle(unittest.TestCase):
+    def test_completion_waits_for_last_observation_publication(self):
+        import x86_rcu_host_init as host
+        self.assertTrue(hasattr(host, 'complete'), 'completion predicate missing')
+        _, final = self.records()
+        self.assertTrue(host.complete(final))
+        final['events'].pop()
+        self.assertFalse(host.complete(final))
+
     def verify(self, held, final):
         path = Path(__file__).with_name('verify_x86_rcu.py')
         self.assertTrue(path.is_file(), 'native RCU oracle missing')

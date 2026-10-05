@@ -14,6 +14,11 @@ from x86_admission_host_init import Console
 GATE = Path('/sys/kernel/debug/mk-native-concurrency-test')
 
 
+def complete(state):
+    # The consumption counter may become visible before its observation slot.
+    return state['done'] and state['consumed'] == 2 and len(state['events']) == 10
+
+
 def wait(predicate, seconds):
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
@@ -39,7 +44,7 @@ def rcu(fd, pending, nonce, child, spare):
     console.wait('PROCESS_REPLY', op='rcu')
     wait(lambda state: state['done'] and state['consumed'] == 1, 8)
     console.command('rcu')
-    final = wait(lambda state: state['done'] and state['consumed'] == 2, 8)
+    final = wait(complete, 8)
     marker('RCU_COMPLETE', nonce=nonce, state=final)
     cli('kill', NAME)
     return console.pending
