@@ -227,6 +227,7 @@ static int unregister_thread(void *unused)
 static ssize_t registry_arm_write(struct file *file, const char __user *data,
 				  size_t count, loff_t *position)
 {
+	struct task_struct *task;
 	char buffer[64], extra;
 	unsigned int mode;
 	u64 value;
@@ -248,23 +249,23 @@ static ssize_t registry_arm_write(struct file *file, const char __user *data,
 	cookie = context->cookie = value;
 	registry_mode = mode;
 	used = true;
-	waiter = kthread_create(unregister_thread, NULL, "mk-reg-retire");
-	if (IS_ERR(waiter)) {
-		ret = PTR_ERR(waiter);
-		waiter = NULL;
+	task = kthread_create(unregister_thread, NULL, "mk-reg-retire");
+	if (IS_ERR(task)) {
+		ret = PTR_ERR(task);
 		goto free_context;
 	}
-	registrar = kthread_create(registration_thread, NULL, "mk-reg-insert");
-	if (IS_ERR(registrar)) {
-		ret = PTR_ERR(registrar);
-		registrar = NULL;
+	get_task_struct(task);
+	waiter = task;
+	task = kthread_create(registration_thread, NULL, "mk-reg-insert");
+	if (IS_ERR(task)) {
+		ret = PTR_ERR(task);
 		goto stop_waiter;
 	}
+	get_task_struct(task);
+	registrar = task;
 	ret = mk_register_msg_handler(MK_MSG_USER, message_callback, context);
 	if (ret)
 		goto stop_registrar;
-	get_task_struct(waiter);
-	get_task_struct(registrar);
 	kthread_bind(waiter, 1);
 	kthread_bind(registrar, 1);
 	wake_up_process(waiter);
@@ -272,9 +273,11 @@ static ssize_t registry_arm_write(struct file *file, const char __user *data,
 	return count;
 stop_registrar:
 	kthread_stop(registrar);
+	put_task_struct(registrar);
 	registrar = NULL;
 stop_waiter:
 	kthread_stop(waiter);
+	put_task_struct(waiter);
 	waiter = NULL;
 free_context:
 	kfree(context);
@@ -285,6 +288,7 @@ free_context:
 static ssize_t arm_write(struct file *file, const char __user *data,
 			 size_t count, loff_t *position)
 {
+	struct task_struct *task;
 	u64 value;
 	int ret;
 
@@ -306,17 +310,17 @@ static ssize_t arm_write(struct file *file, const char __user *data,
 		return -ENOMEM;
 	}
 	WRITE_ONCE(used, true);
-	waiter = kthread_create(unregister_thread, NULL, "mk-rcu-retire");
-	if (IS_ERR(waiter)) {
-		ret = PTR_ERR(waiter);
-		waiter = NULL;
+	task = kthread_create(unregister_thread, NULL, "mk-rcu-retire");
+	if (IS_ERR(task)) {
+		ret = PTR_ERR(task);
 		multikernel_unregister_handler(selected);
 		kfree(context);
 		WRITE_ONCE(timed_out, true);
 		return ret;
 	}
 	/* Task-only observation reference, retained in this one-shot disposable VM. */
-	get_task_struct(waiter);
+	get_task_struct(task);
+	waiter = task;
 	kthread_bind(waiter, 1);
 	wake_up_process(waiter);
 	return count;
@@ -367,18 +371,39 @@ static ssize_t registry_send_write(struct file *file, const char __user *data,
 	return ret ?: count;
 }
 
+static bool boundary_seen(unsigned int point)
+{
+	unsigned int i;
+
+	for (i = 0; i < ARRAY_SIZE(events); i++) {
+		if (smp_load_acquire(&events[i].ready) && events[i].point == point)
+			return true;
+	}
+	return false;
+}
+
 static int status_show(struct seq_file *seq, void *unused)
 {
 	unsigned int i;
-	bool first = true, finished = smp_load_acquire(&done);
-	bool sleeping = waiter && !finished &&
+	bool first = true, finished, registration_finished;
+	bool retiring, contending, sleeping, registrar_sleeping;
+
+	/* Serialize task publication/unwind and release with this snapshot. */
+	guard(mutex)(&control_lock);
+	/* Acquire the phase first: initial callback_wait sleep is not proof. */
+	retiring = boundary_seen(3);
+	contending = boundary_seen(11);
+	finished = smp_load_acquire(&done);
+	registration_finished = smp_load_acquire(&registration_done);
+	sleeping = retiring && waiter && !finished &&
 		(READ_ONCE(waiter->__state) & (TASK_INTERRUPTIBLE | TASK_UNINTERRUPTIBLE));
+	registrar_sleeping = contending && registrar && !registration_finished &&
+		(READ_ONCE(registrar->__state) & (TASK_INTERRUPTIBLE | TASK_UNINTERRUPTIBLE));
 
 	seq_printf(seq, "{\"mode\":%u,\"type_context\":\"%px\",\"registration_done\":%s,\"registration_result\":%d,\"replacement_invocations\":%d,\"registrar_sleeping\":%s,",
-		registry_mode, type_context, smp_load_acquire(&registration_done) ? "true" : "false",
+		registry_mode, type_context, registration_finished ? "true" : "false",
 		READ_ONCE(registration_result), atomic_read(&replacement_invocations),
-		registrar && !READ_ONCE(registration_done) &&
-		(READ_ONCE(registrar->__state) & (TASK_INTERRUPTIBLE | TASK_UNINTERRUPTIBLE)) ? "true" : "false");
+		registrar_sleeping ? "true" : "false");
 	seq_printf(seq, "\"cookie\":\"%016llx\",\"handler\":\"%px\",\"context\":\"%px\",\"invocations\":%d,\"consumed\":%d,\"released\":%s,\"timed_out\":%s,\"waiter_sleeping\":%s,\"done\":%s,\"overflow\":%s,\"events\":[",
 		cookie, selected, context, atomic_read(&invocations), atomic_read(&consumed),
 		READ_ONCE(released) ? "true" : "false", READ_ONCE(timed_out) ? "true" : "false",
