@@ -81,12 +81,18 @@ def verify(trace, halt='requested'):
             cpu = event['fault_cpu']
             pointers = ('image', 'ring', 'ring_phys', 'control', 'context', 'pool')
             if (event.get('status') != 'active' or event.get('owned_cpus') != groups[1]
-                    or event.get('unload_errno') != 16 or event.get('destroy_errno') != 16
+                    or event.get('unload_errno') != 16 or event.get('destroy_status') != 'failed'
                     or cpu not in groups[1] or before != after
                     or before.get('state') != 3 or before.get('pool_size') != 536870912
                     or any(not int(before[key], 16) for key in pointers)):
                 errors.append('failed confirmation did not retain ownership/allocations or refuse reclaim')
-            injection = trace.find(f'MK_X86_TEST_CONFIRM_FAIL phys={cpu}')
+            transaction = event.get('destroy_transaction')
+            if (type(transaction) is not int or transaction <= 0
+                    or not re.search(r'Overlay tx' + str(transaction)
+                                     + r": Failed to remove instance 'native-child': -16\b", trace)):
+                errors.append('no kernel destruction refusal for the specific transaction')
+            fault = re.search(r'\bMK_X86_TEST_CONFIRM_FAIL phys=' + str(cpu) + r'\b', trace)
+            injection = fault.start() if fault else -1
             if (not positions[3] < injection < retained[0].start() < cleared[0].start() < confirm
                     or json.loads(cleared[0][1]).get('cpu') != cpu):
                 errors.append('missing actual fault injection followed by bounded recovery')

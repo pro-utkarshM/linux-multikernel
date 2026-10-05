@@ -29,14 +29,14 @@ payload. The supplied output parent must already exist.
 Boot ONLY in a disposable VM, never on the machine running these tests:
 
   timeout --kill-after=5s 240s qemu-system-x86_64 \
-    -machine q35 -accel tcg,thread=multi -cpu max -smp 6 -m 2048 \
+    -machine q35 -accel tcg,thread=multi -cpu max -smp 6 -m 3072 \
     -kernel "$bundle/bzImage" -initrd "$bundle/host-initrd.cpio.gz" \
-    -append 'console=ttyS0,115200 rdinit=/init panic=0 kernelcore=1G log_buf_len=4M mk_test=x86-host' \
+    -append 'console=ttyS0,115200 rdinit=/init panic=0 kernelcore=1G log_buf_len=4M mk_test=x86-host nokaslr' \
     -nographic -monitor none -nic none -no-reboot
 
 Capture the complete command, QEMU version, raw serial output and actual timeout
 exit code. Both VM exit and verifier must succeed; do not let tee hide failures.
-Run `python3 verify_x86_child.py SERIAL_LOG` and the Python verifier unit suite.
+Run the frozen bundle's verify_x86_child.py and the Python verifier unit suite.
 Hash evidence separately after copying it; the original input bundle manifest
 does not attest output logs added after launch.
 
@@ -46,6 +46,9 @@ the child 512 MiB, loads the real ELF Image plus child initrd, and requires both
 assigned CPUs online, PID 1, a distinct boot identity and a nonce-matched reply
 over mktty. Requested halt must report all CPUs parked before LOADED; unload
 must leave the host alive and instance READY with retained CPU ownership.
+The 768 MiB contiguous pool failed intermittently before spawn with KASLR
+enabled at 2 and 3 GiB VM RAM. The bounded qualification lane uses 3 GiB plus
+host nokaslr; this is not a production allocator fix or KASLR-on qualification.
 
 A PASS is ONLY executing-child boot, requested halt and unload under QEMU TCG.
 It is NOT incoming-worker/controller interleaving, IRQ/RCU callback retirement,
@@ -59,3 +62,19 @@ CPUs before confirmation. Voluntary lanes send a mktty userspace command to
 the child and wait for confirmed settlement; they do not call host poweroff or
 reboot until all assertions have run. A pass in these lanes does not prove
 failed-confirmation retention or callback/concurrency safety.
+
+Stop-confirmation failure lane (test branch only): build a separate kernel with
+CONFIG_MK_X86_NATIVE_CONFIRM_TEST=y; never add it to production. Append HOST
+mk_x86_halt=force-retain mk_native_confirm_test=1 and verify with
+--halt=force-retain. The option defaults off; without the explicit host boot
+parameter no debugfs interface is created and no confirmation is injected.
+The default-off build must have no mk_x86_native_confirm_failure symbol.
+
+After a real child handshake, the selector rejects confirmation for the last
+assigned physical CPU. Force-halt must fail and leave ACTIVE, CPU ownership,
+Image, ring, control/context and pool allocations unchanged. File unload must
+return EBUSY. The destruction overlay is accepted as a transaction but must
+have status failed, a specific kernel EBUSY refusal and a retained instance.
+After clearing the selector, a second force-halt must confirm all CPUs and
+permit unload. This models inability to prove stop, NOT a real CPU proven to
+be executing the Image, and does not qualify IRQ/RCU or bulk cleanup races.

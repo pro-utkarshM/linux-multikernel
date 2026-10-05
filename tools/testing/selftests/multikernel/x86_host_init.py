@@ -84,17 +84,27 @@ def failed_force_retention(child):
         # Bypass Kerf's userspace state refusal, not the kernel guard. This is
         # the existing removal overlay, written to the actual kernel entry.
         blob = bytes(OverlayGenerator().generate_removal_overlay(NAME))
+        transactions = set((BASE / 'overlays').glob('tx_*'))
         fd = os.open(BASE / 'overlays' / 'new', os.O_WRONLY | os.O_CLOEXEC)
         try:
             assert os.write(fd, blob) == len(blob)
         finally:
             os.close(fd)
+        # The ABI accepts a failed transaction too. Identify our directory by
+        # the set difference (single writer here), never a latest-tx heuristic.
+        created = set((BASE / 'overlays').glob('tx_*')) - transactions
+        assert len(created) == 1, created
+        transaction = created.pop()
+        result = (transaction / 'status').read_text().strip()
+        assert result == 'failed', result
+        return int(transaction.name.removeprefix('tx_')), result
 
-    destroy_errno = rejected(destroy)
+    destroy_transaction, destroy_status = destroy()
     after = json.loads((fault / 'snapshot').read_text())
     assert before == after and ownership() == owned
     marker('RETAINED', fault_cpu=child[-1], status=status('active'),
-           owned_cpus=owned, unload_errno=unload_errno, destroy_errno=destroy_errno,
+           owned_cpus=owned, unload_errno=unload_errno, destroy_status=destroy_status,
+           destroy_transaction=destroy_transaction,
            allocations_before=before, allocations_after=after)
     (fault / 'fail_cpu').write_text(str((1 << 64) - 1) + '\n')
     marker('CONFIRM_FAULT_CLEAR', cpu=child[-1])
