@@ -24,7 +24,7 @@ def wait(predicate, seconds):
         if predicate(state):
             return state
         time.sleep(0.001)
-    raise RuntimeError('native writer observation deadline expired')
+    raise RuntimeError(f'native writer observation deadline expired: {state}')
 
 
 def stop(fd, pending, nonce, child, spare):
@@ -33,6 +33,7 @@ def stop(fd, pending, nonce, child, spare):
 
 
 def unload(fd, pending, nonce, child, spare):
+    from kerf.unload.main import kexec_file_unload, KEXEC_FILE_UNLOAD, KEXEC_MULTIKERNEL, KEXEC_MK_ID
     os.sched_setaffinity(0, {2})
     marker('WRITER_BEGIN', nonce=nonce, taint=int(Path('/proc/sys/kernel/tainted').read_text()))
     start = threading.Event()
@@ -40,7 +41,9 @@ def unload(fd, pending, nonce, child, spare):
         os.sched_setaffinity(0, {1})
         if not start.wait(5):
             raise RuntimeError('Image unloader was never admitted')
-        cli('unload', NAME)  # real Kerf kexec_file_load(KEXEC_FILE_UNLOAD)
+        # Import before the hold; do not fork/exec a cold Python CLI while H0
+        # has interrupts disabled. This is the same real Kerf unload syscall.
+        kexec_file_unload(KEXEC_MULTIKERNEL | KEXEC_MK_ID(1) | KEXEC_FILE_UNLOAD)
     operation = Operation(unloader)
     (GATE / 'writer_arm').write_text(nonce)
     wait(lambda s: len(s['events']) == 1, 1)
