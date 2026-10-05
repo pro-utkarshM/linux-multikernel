@@ -3,11 +3,35 @@
 """Reject premature persistent allocation free; literal fixtures only."""
 import copy
 import importlib.util
+import json
 from pathlib import Path
 import unittest
+import test_verify_x86_nested as nested_fixture
 
 
 class DestroyOracle(unittest.TestCase):
+    def test_trace_requires_removal_and_pool_return_before_release(self):
+        import verify_x86_destroy as verifier
+        self.assertTrue(callable(getattr(verifier, 'verify', None)), 'destruction trace gate missing')
+        nested = nested_fixture.NestedPoolGate().trace()
+        held, final = self.records()
+        initial = dict(held, retired=False, probed=False, probe_result=0, events=held['events'][:1])
+        def mark(name, **fields):
+            return 'MK_X86_' + name + ' ' + json.dumps(fields) + '\n'
+        armed = mark('DESTROY_ARMED', nonce=held['cookie'], state=initial, taint=0)
+        middle = [mark('DESTROY_HELD', nonce=held['cookie'], state=held, transaction=3,
+                       status='applied', instance_absent=True, pool_cpus=[3, 4, 5, 6, 7]),
+                  mark('DESTROY_COMPLETE', nonce=held['cookie'], state=final, taint=0)]
+        trace = ''.join(nested[:9] + [armed, nested[9]] + middle + nested[10:]).replace(
+            'nested-pool-prerequisite', 'native-destroy')
+        self.assertEqual(verifier.verify(trace, nested_fixture.REVISION), [])
+        for bad in (trace.replace('"instance_absent": true', '"instance_absent": false'),
+                    trace.replace('"pool_cpus": [3, 4, 5, 6, 7]', '"pool_cpus": [6, 7]'),
+                    trace.replace('"transaction": 3', '"transaction": 0'),
+                    trace.replace('"status": "applied"', '"status": "failed"'),
+                    trace.replace(armed, '') + armed):
+            self.assertTrue(verifier.verify(bad, nested_fixture.REVISION))
+
     def verify(self, held, final):
         path = Path(__file__).with_name('verify_x86_destroy.py')
         self.assertTrue(path.is_file(), 'native destruction verifier missing')

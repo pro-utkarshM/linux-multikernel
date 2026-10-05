@@ -132,6 +132,7 @@ void mk_instance_ipi_deactivate(struct mk_instance *instance)
 	instance->ipi_data = NULL;
 #ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
 	mk_native_writer_boundary(instance, 5);
+	mk_native_destroy_boundary((unsigned long)instance, 2);
 #endif
 	raw_spin_unlock_irqrestore(&instance->ipi_lock, flags);
 }
@@ -294,6 +295,10 @@ int multikernel_send_ipi_data(int instance_id, void *data, size_t data_size, uns
 	raw_spin_unlock_irqrestore(&instance->ipi_lock, flags);
 
 	mk_arch_send_ipi(target);
+
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	mk_native_destroy_hold(instance, data, data_size);
+#endif
 
 	mk_instance_put(instance);
 	return 0;

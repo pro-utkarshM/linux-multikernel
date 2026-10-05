@@ -91,6 +91,7 @@ static int __init concurrency_init(void)
 	mk_native_rcu_init(directory);
 	mk_native_tty_init(directory);
 	mk_native_writer_init(directory);
+	mk_native_destroy_init(directory);
 	return 0;
 }
 late_initcall(concurrency_init);

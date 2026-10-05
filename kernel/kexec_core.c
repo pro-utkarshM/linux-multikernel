@@ -635,6 +635,7 @@ void kimage_free_multikernel(struct kimage *image)
 			       image->segment[i].memsz);
 #ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
 	mk_native_writer_segments(instance, image);
+	mk_native_destroy_boundary((unsigned long)instance, 3);
 #endif
 
 	/* Load-time buffers were kept as the source for each spawn */

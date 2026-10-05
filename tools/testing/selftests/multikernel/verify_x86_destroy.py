@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0
 """Verify persistent allocation reclamation after a real sender's last put."""
+import argparse
+import json
+from pathlib import Path
 import re
+from verify_x86_nested import verify as verify_nested, validate_nested_bundle
 
 
 def verify_records(held, final):
@@ -32,3 +36,56 @@ def verify_records(held, final):
     except (KeyError, ValueError, TypeError) as error:
         return [str(error)]
     return []
+
+
+def verify(trace, revision):
+    errors = verify_nested(trace, revision, qualification='native-destroy')
+    try:
+        def one(name):
+            matches = list(re.finditer(r'^MK_X86_' + name + r' (.*)$', trace, re.M))
+            if len(matches) != 1:
+                raise ValueError(name + ': expected exactly one event')
+            return matches[0].start(), json.loads(matches[0][1])
+        armed_at, armed = one('DESTROY_ARMED')
+        held_at, held = one('DESTROY_HELD')
+        final_at, final = one('DESTROY_COMPLETE')
+        nonce = one('PING')[1]['nonce']
+        if not (one('NESTED_HALTED')[0] < armed_at < one('NESTED_UNLOADED')[0]
+                < held_at < final_at < one('NESTED_HOST_SURVIVED')[0]):
+            raise ValueError('destruction must follow actual stop/unload and precede host-survival proof')
+        if (any(v.get('nonce') != nonce or v['state']['cookie'] != nonce for v in (armed, held, final))
+                or any(v.get('taint') != 0 for v in (armed, final))):
+            raise ValueError('destruction taint/correlation failure')
+        initial, before = armed['state'], held['state']
+        if (initial['events'] != before['events'][:1]
+                or any(initial.get(k) != before[k] for k in ('instance', 'image', 'ring', 'manifest', 'pool'))
+                or any(initial.get(k) is not False for k in ('released', 'failed', 'retired', 'sent', 'probed'))):
+            raise ValueError('sender reference not held before unload')
+        groups = one('NESTED_BEGIN')[1]
+        if (held.get('instance_absent') is not True or held.get('status') != 'applied'
+                or type(held.get('transaction')) is not int or held['transaction'] <= 0
+                or held.get('pool_cpus') != sorted(groups['child_cpus'] + groups['spare_cpus'])):
+            raise ValueError('actual removal, transaction or pool CPU return missing')
+        errors += verify_records(before, final['state'])
+    except (KeyError, ValueError, TypeError) as error:
+        errors.append(str(error))
+    return errors
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('trace', type=Path)
+    parser.add_argument('--revision', required=True)
+    parser.add_argument('--bundle', type=Path, required=True)
+    args = parser.parse_args()
+    errors = validate_nested_bundle(args.bundle, args.revision, profile='destroy')
+    errors += verify(args.trace.read_text(errors='replace'), args.revision)
+    for error in errors:
+        print('FAIL:', error)
+    if not errors:
+        print('PASS: native sender reference/removal/deferred reclamation; not DMA or physical proof')
+    return bool(errors)
+
+
+if __name__ == '__main__':
+    raise SystemExit(main())

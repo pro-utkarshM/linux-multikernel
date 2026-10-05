@@ -43,6 +43,10 @@ void mk_native_writer_claim(struct mk_instance *instance, void *data, size_t siz
 bool mk_native_writer_deactivate_lock(struct mk_instance *instance, unsigned long *flags);
 void mk_native_writer_boundary(struct mk_instance *instance, unsigned int point);
 void mk_native_writer_segments(struct mk_instance *instance, struct kimage *image);
+void mk_native_destroy_init(struct dentry *directory);
+void mk_native_destroy_hold(struct mk_instance *instance, void *data, size_t size);
+void mk_native_destroy_boundary(unsigned long identity, unsigned int point);
+void mk_native_destroy_retired(struct mk_instance *instance);
 void mk_native_checkpoint(unsigned int point, u64 request, u64 cpu,
 			  int result, unsigned int operation);
 #endif

@@ -16,6 +16,9 @@
 #include <linux/vmalloc.h>
 #include <linux/rcupdate.h>
 #include "internal.h"
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+#include <asm/multikernel_test.h>
+#endif
 
 int mk_instance_idr_add(struct mk_instance *instance, int start, int end)
 {
@@ -237,6 +240,9 @@ static void mk_instance_free_boot_pages(struct mk_instance *instance)
 		     get_order(sizeof(struct mk_shared_data)));
 	__free_pages(phys_to_page(instance->manifest_phys),
 		     get_order(MK_MANIFEST_SIZE));
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	mk_native_destroy_boundary((unsigned long)instance, 10);
+#endif
 	instance->ipi_data = NULL;
 	instance->ipi_phys = 0;
 	instance->manifest_phys = 0;
@@ -254,9 +260,16 @@ static void mk_instance_release_work(struct work_struct *work)
 {
 	struct mk_instance *instance = container_of(work, struct mk_instance, release_work);
 	int ret;
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	unsigned long identity = (unsigned long)instance;
 
+	mk_native_destroy_boundary(identity, 8);
+#endif
 	/* Drain lookups that saw this record but did not acquire a reference. */
 	synchronize_rcu();
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	mk_native_destroy_boundary(identity, 9);
+#endif
 	mutex_lock(&mk_overlay_mutex);
 	if (instance->state != MK_STATE_READY || instance->kimage) {
 		pr_err("Instance %d final release refused: not reusable; retaining allocations\n",
@@ -283,6 +296,9 @@ static void mk_instance_release_work(struct work_struct *work)
 	mk_cpu_set_free(instance->cpus);
 	kfree(instance->name);
 	kfree(instance);
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	mk_native_destroy_boundary(identity, 11);
+#endif
 	mutex_unlock(&mk_overlay_mutex);
 }
 

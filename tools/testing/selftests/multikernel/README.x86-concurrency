@@ -159,3 +159,24 @@ segment count, exact event ordering and zero host taint are mandatory.
 The observer holds no instance reference of its own. This case establishes
 producer exclusion against Image unload, NOT persistent ring-page destruction:
 boot/ring pages survive unload and require a separate final-reference test.
+
+Sender reference versus instance destruction
+-------------------------------------------
+
+Use --profile=destroy, mk_test=x86-destroy-host and verify_x86_destroy.py.
+After the same confirmed halt, an H0 sender publishes and rings the real
+doorbell, then waits in process context immediately before its original
+lookup reference is dropped. No observer takes an extra instance reference.
+H1 unloads the Image, then applies Kerf's real removal overlay. Require IDR
+removal, synchronous pool/control-memory retirement and CPU return before
+H2 releases that sender. A new lookup/send must return -EINVAL while the old
+reference still exists. This explicitly demonstrates that kref is NOT a
+pool-allocation pin.
+
+After release, require the original sender's put boundary, actual deferred
+release work and RCU grace completion, then persistent boot/ring page frees
+and instance-record free. The bounded process hold is 30 seconds; expiry
+invalidates qualification. Records retain identities only, never dereference
+freed memory. Frozen verifiers require the real removal transaction, missing
+instance directory, returned physical CPU set and zero host taint. This case
+does not qualify DMA/device quiescence, PREEMPT_RT or physical hardware.
