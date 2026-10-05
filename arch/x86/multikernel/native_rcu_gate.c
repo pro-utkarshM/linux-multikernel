@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /* Disposable QEMU-only native IPI/RCU proof. No IRQ printing or sleeping. */
 #include <linux/debugfs.h>
+#include <linux/completion.h>
 #include <linux/interrupt.h>
 #include <linux/kthread.h>
 #include <linux/ktime.h>
@@ -19,7 +20,8 @@ struct rcu_probe_event {
 };
 static DEFINE_PER_CPU(bool, in_native_vector);
 static DEFINE_MUTEX(control_lock);
-static DECLARE_WAIT_QUEUE_HEAD(callback_wait);
+static DECLARE_COMPLETION(callback_entered_done);
+static DECLARE_COMPLETION(registry_detached_done);
 static struct rcu_probe_event events[32];
 static atomic_t sequence = ATOMIC_INIT(0), invocations = ATOMIC_INIT(0);
 static atomic_t consumed = ATOMIC_INIT(0);
@@ -108,7 +110,7 @@ static void callback_hold(u64 value, struct rcu_probe_context *ctx)
 	atomic_inc(&invocations);
 	record(1);
 	WRITE_ONCE(entered, true);
-	wake_up(&callback_wait);
+	complete(&callback_entered_done);
 	while (!smp_load_acquire(&released)) {
 		if (ktime_get_mono_fast_ns() >= deadline) {
 			WRITE_ONCE(timed_out, true);
@@ -172,7 +174,7 @@ void mk_native_registry_detached(bool terminal)
 		return;
 	record(12);
 	WRITE_ONCE(detached, true);
-	wake_up(&callback_wait);
+	complete(&registry_detached_done);
 }
 
 void mk_native_registry_freed(unsigned long identity)
@@ -197,7 +199,7 @@ bool mk_native_registry_lock(struct mutex *lock)
 
 static int registration_thread(void *unused)
 {
-	if (!wait_event_timeout(callback_wait, READ_ONCE(detached), 10 * HZ)) {
+	if (!wait_for_completion_timeout(&registry_detached_done, 10 * HZ)) {
 		WRITE_ONCE(timed_out, true);
 		return 0;
 	}
@@ -209,7 +211,7 @@ static int registration_thread(void *unused)
 
 static int unregister_thread(void *unused)
 {
-	if (!wait_event_timeout(callback_wait, READ_ONCE(entered), 10 * HZ))
+	if (!wait_for_completion_timeout(&callback_entered_done, 10 * HZ))
 		WRITE_ONCE(timed_out, true);
 	if (registry_mode == 2)
 		mk_messaging_cleanup();
@@ -390,7 +392,7 @@ static int status_show(struct seq_file *seq, void *unused)
 
 	/* Serialize task publication/unwind and release with this snapshot. */
 	guard(mutex)(&control_lock);
-	/* Acquire the phase first: initial callback_wait sleep is not proof. */
+	/* Acquire the phase first: initial completion sleep is not proof. */
 	retiring = boundary_seen(3);
 	contending = boundary_seen(11);
 	finished = smp_load_acquire(&done);
