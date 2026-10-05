@@ -119,8 +119,9 @@ bool mk_native_tty_worker(void *conn)
 		WRITE_ONCE(failed, true);
 		return false;
 	}
-	record(10);
 	smp_store_release(&entered, true);
+	/* Observing event 10 admits the closer; publish its prerequisites first. */
+	record(10);
 	if (!wait_for_completion_timeout(&worker_release, 10 * HZ))
 		WRITE_ONCE(failed, true);
 	return true;
