@@ -15,6 +15,9 @@ import time
 sys.path.insert(0, '/usr/lib/python3/dist-packages')
 from x86_host_init import BASE, NAME, cli, marker, mount, ownership, require_qemu, status
 
+# Terminal registry tests explicitly retain the child and discard the VM.
+TERMINAL_CAPTURE = object()
+
 
 def capture_tail(fd, pending):
     """Bounded console capture before and after confirmed stop, before unload.
@@ -118,6 +121,8 @@ def workload(after_nested=None, *, profile='nested'):
         if after_nested:
             # The admission callback performs and confirms its drain/halt.
             pending = after_nested(fd, pending, nonce, child, spare)
+            if pending is TERMINAL_CAPTURE:
+                return
         else:
             cli('kill', NAME)
         pending = capture_tail(fd, pending)
@@ -130,7 +135,8 @@ def workload(after_nested=None, *, profile='nested'):
         marker('NESTED_HOST_SURVIVED',
                online=Path('/sys/devices/system/cpu/online').read_text().strip(),
                boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip())
-        marker('NESTED_PASS', slice='native-' + profile if after_nested else 'nested-pool-prerequisite')
+        qualification = 'native-registry-replace' if profile == 'registry' else 'native-' + profile
+        marker('NESTED_PASS', slice=qualification if after_nested else 'nested-pool-prerequisite')
     finally:
         os.close(fd)
 

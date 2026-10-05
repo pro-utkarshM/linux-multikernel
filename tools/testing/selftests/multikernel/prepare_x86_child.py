@@ -70,7 +70,7 @@ def dependencies(paths):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--prepare', action='store_true', help='package into a fresh directory; never launch')
-    parser.add_argument('--profile', choices=('halt', 'nested', 'admission', 'rcu'), default='halt',
+    parser.add_argument('--profile', choices=('halt', 'nested', 'admission', 'rcu', 'registry'), default='halt',
                         help='six-CPU halt or eight-CPU nested/admission lane')
     parser.add_argument('--revision', help='main-attested full kernel source revision, required to prepare')
     parser.add_argument('--source', type=Path, required=True)
@@ -134,6 +134,9 @@ def main():
         inputs += [host_init, child_init, HERE / 'verify_x86_admission.py']
     if args.profile == 'rcu':
         inputs += [host_init, child_init, HERE / 'verify_x86_rcu.py', HERE / 'x86_admission_host_init.py']
+    if args.profile == 'registry':
+        inputs += [host_init, child_init, HERE / 'verify_x86_registry.py',
+                   HERE / 'x86_admission_host_init.py', HERE / 'x86_rcu_host_init.py']
     hashes = {str(path.resolve()): digest(path) for path in inputs}
     print(json.dumps({'mode': 'prepare' if args.prepare else 'HOST_DRY_RUN_ONLY',
                       'source_head': source_head, 'artifact_revision': args.revision or 'UNATTESTED',
@@ -180,11 +183,13 @@ def main():
     install(host_init, 'init')
     if args.profile != 'halt':
         install(HERE / 'x86_host_init.py', 'usr/lib/python3/dist-packages/x86_host_init.py')
-    if args.profile in ('admission', 'rcu'):
+    if args.profile in ('admission', 'rcu', 'registry'):
         for name in ('x86_nested_host_init.py', 'x86_nested_child_init.py'):
             install(HERE / name, 'usr/lib/python3/dist-packages/' + name)
-    if args.profile == 'rcu':
+    if args.profile in ('rcu', 'registry'):
         install(HERE / 'x86_admission_host_init.py', 'usr/lib/python3/dist-packages/x86_admission_host_init.py')
+    if args.profile == 'registry':
+        install(HERE / 'x86_rcu_host_init.py', 'usr/lib/python3/dist-packages/x86_rcu_host_init.py')
     (root / 'init').chmod(0o755)
     (root / 'payload/source-revision').write_text(args.revision + '\n')
     # Reuse the same offline Python runtime; the child has no kernel payload.
@@ -212,6 +217,8 @@ def main():
         shutil.copy2(HERE / 'verify_x86_admission.py', bundle / 'verify_x86_admission.py')
     if args.profile == 'rcu':
         shutil.copy2(HERE / 'verify_x86_rcu.py', bundle / 'verify_x86_rcu.py')
+    if args.profile == 'registry':
+        shutil.copy2(HERE / 'verify_x86_registry.py', bundle / 'verify_x86_registry.py')
     install(args.kernel_build / 'vmlinux', 'payload/vmlinux')
     shutil.copy2(args.kernel_build / 'arch/x86/boot/bzImage', bundle / 'bzImage')
     shutil.copy2(config, bundle / 'kernel.config')

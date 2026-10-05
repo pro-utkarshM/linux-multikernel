@@ -18,11 +18,18 @@ enum mk_native_point {
 };
 struct dentry;
 struct mk_ipi_data;
+struct mk_ipi_handler;
+struct mutex;
 void mk_native_gate_init(struct dentry *directory);
 void mk_native_rcu_init(struct dentry *directory);
 void mk_native_rcu_vector(bool entered);
 void mk_native_rcu_boundary(unsigned long handler, unsigned int point);
 void mk_native_rcu_consumed(unsigned int type, size_t size, u64 cookie);
+u64 mk_native_rcu_tag(struct mk_ipi_data *data);
+bool mk_native_registry_lock(struct mutex *lock);
+void mk_native_registry_published(void *ctx, struct mk_ipi_handler *handler, void *type);
+void mk_native_registry_detached(bool terminal);
+void mk_native_registry_freed(unsigned long identity);
 void mk_native_checkpoint(unsigned int point, u64 request, u64 cpu,
 			  int result, unsigned int operation);
 #endif

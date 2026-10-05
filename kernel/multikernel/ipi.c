@@ -360,7 +360,7 @@ static void mk_ipi_drain_ring(void)
 #ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
 		/* Copy before allowing a producer to reuse this slot. */
 		native_type = slot->type;
-		memcpy(&native_cookie, slot->buffer, sizeof(native_cookie));
+		native_cookie = mk_native_rcu_tag(slot);
 #endif
 
 		/* Mark consumed so the slot reads as unpublished again */

@@ -48,6 +48,9 @@ static struct mk_msg_type_handler *mk_msg_type_handlers;
  * Writers must not hold callback-owned locks while waiting for retirement.
  */
 static DEFINE_MUTEX(mk_msg_type_handlers_lock);
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+#include <asm/multikernel_test.h>
+#endif
 static bool mk_messaging_initialized;
 static bool mk_messaging_accepting;
 
@@ -313,7 +316,10 @@ int mk_register_msg_handler(u32 msg_type, mk_msg_handler_t handler, void *ctx)
 	if (WARN_ON_ONCE(in_interrupt()))
 		return -EWOULDBLOCK;
 
-	mutex_lock(&mk_msg_type_handlers_lock);
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	if (!mk_native_registry_lock(&mk_msg_type_handlers_lock))
+#endif
+		mutex_lock(&mk_msg_type_handlers_lock);
 	if (!mk_messaging_accepting) {
 		ret = -ESHUTDOWN;
 		goto unlock;
@@ -352,6 +358,9 @@ int mk_register_msg_handler(u32 msg_type, mk_msg_handler_t handler, void *ctx)
 	/* Add to type handler list */
 	type_handler->next = mk_msg_type_handlers;
 	mk_msg_type_handlers = type_handler;
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	mk_native_registry_published(ctx, type_handler->ipi_handler, type_handler);
+#endif
 
 	pr_debug("Registered multikernel message handler for type 0x%x\n", msg_type);
 	ret = 0;
@@ -392,11 +401,19 @@ int mk_unregister_msg_handler(u32 msg_type, mk_msg_handler_t handler)
 	}
 
 	if (found) {
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+		unsigned long identity = (unsigned long)type_handler;
+
+		mk_native_registry_detached(false);
+#endif
 		/* Keep same-type insertion excluded until old callbacks have returned. */
 		if (type_handler->ipi_handler) {
 			multikernel_unregister_handler(type_handler->ipi_handler);
 		}
 		kfree(type_handler);
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+		mk_native_registry_freed(identity);
+#endif
 		mutex_unlock(&mk_msg_type_handlers_lock);
 		pr_debug("Unregistered multikernel message handler for type 0x%x\n", msg_type);
 		return 0;
@@ -448,9 +465,15 @@ void mk_messaging_cleanup(void)
 	mk_messaging_accepting = false;
 	type_handler = mk_msg_type_handlers;
 	mk_msg_type_handlers = NULL;
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	mk_native_registry_detached(true);
+#endif
 
 	/* The mutex is never callback-owned; concurrent cleanup also waits here. */
 	while (type_handler) {
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+		unsigned long identity = (unsigned long)type_handler;
+#endif
 		next = type_handler->next;
 
 		/* Unregister IPI handler */
@@ -459,6 +482,9 @@ void mk_messaging_cleanup(void)
 		}
 
 		kfree(type_handler);
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+		mk_native_registry_freed(identity);
+#endif
 		type_handler = next;
 	}
 	mutex_unlock(&mk_msg_type_handlers_lock);

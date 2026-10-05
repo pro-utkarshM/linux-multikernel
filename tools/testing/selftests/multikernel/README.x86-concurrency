@@ -97,3 +97,28 @@ unregister and must not invoke the old callback. Only a task-observer reference
 is retained for the disposable VM's one-shot report; it does not pin the tested
 handler/context. The test files require the existing config/boot/QEMU guards.
 This does not qualify messaging terminal cleanup, MKTTY close or ring writers.
+
+Message registry replacement and terminal cleanup
+------------------------------------------------
+
+Use --profile=registry and mk_test=x86-registry-host, with an explicit
+mk_registry_mode=replace or mk_registry_mode=cleanup. The frozen verifier is
+verify_x86_registry.py with --mode matching the launch. Each mode needs its
+own disposable VM; terminal cleanup is not reversible and is never followed
+by a messaging reinitialization.
+
+Both cases enter the real message wrapper and callback on H0. H1 performs
+the actual type-list detach and unregister/cleanup. Another H1 kthread tries
+same-type registration: only its genuine failed mutex_trylock counts as
+contention, followed by the normal blocking mutex_lock. H2 observes both
+waiters sleeping and releases the bounded IRQ gate. Require last callback
+access before native grace completion, handler/wrapper frees, and registration
+return. Replacement must succeed and receive the second message; terminal
+cleanup must reject registration with -ESHUTDOWN and invoke neither old nor
+replacement callback on the second consumed message.
+
+Replacement finishes with ordinary confirmed halt/unload. Terminal cleanup
+leaves the instance ACTIVE with its assigned CPUs and memory retained; the
+host reports survival and discards the VM. It MUST NOT be described as safe
+instance reclamation or ordinary shutdown after cleanup. These tests still
+do not qualify MKTTY final close, ring writers, lockdep/RT or real hardware.

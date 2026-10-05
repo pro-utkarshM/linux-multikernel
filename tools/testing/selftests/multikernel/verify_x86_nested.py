@@ -16,10 +16,12 @@ def cpu_set(value, size=None):
             and len(set(value)) == len(value) and value == sorted(value))
 
 
-def verify(trace, expected_revision=None, *, admission=False, qualification=None):
+def verify(trace, expected_revision=None, *, admission=False, qualification=None, terminal=False):
     names = ('NESTED_BEGIN', 'CHILD_ALIVE', 'PING', 'CHILD_REPLY',
              'NESTED_POOL_READY', 'NESTED_CPU_RETURNED', 'NESTED_POOL_RETIRED',
              'NESTED_HALTED', 'NESTED_UNLOADED', 'NESTED_HOST_SURVIVED', 'NESTED_PASS')
+    if terminal:
+        names = tuple(name for name in names if name not in ('NESTED_HALTED', 'NESTED_UNLOADED'))
     errors, events, positions = [], {}, {}
     if re.search(r'MK_X86_FAIL|Kernel panic - not syncing:|WARNING:|BUG:|Sent NMI to'
                  r'|general protection fault|Oops:|detected (?:expedited )?stalls'
@@ -116,10 +118,10 @@ def verify(trace, expected_revision=None, *, admission=False, qualification=None
     if returned.get('transaction') == retired.get('transaction'):
         errors.append('CPU return and teardown reused the same transaction')
     confirmation = trace.find('Instance 1 (native-child) halted, all CPUs confirmed parked')
-    if not positions['NESTED_POOL_RETIRED'] < confirmation < positions['NESTED_HALTED']:
+    if not terminal and not positions['NESTED_POOL_RETIRED'] < confirmation < positions['NESTED_HALTED']:
         errors.append('parent did not confirm all CPUs after nested park retirement')
     final_assigned = sorted(assigned + groups[2][:1]) if admission else assigned
-    for name, state in (('NESTED_HALTED', 'loaded'), ('NESTED_UNLOADED', 'ready')):
+    for name, state in (() if terminal else (('NESTED_HALTED', 'loaded'), ('NESTED_UNLOADED', 'ready'))):
         if events[name].get('status') != state or events[name].get('assigned_cpus') != final_assigned:
             errors.append(f'{name}: reusable state or retained ownership mismatch')
     if events['NESTED_HOST_SURVIVED'].get('online') != '0-2':
