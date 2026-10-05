@@ -4342,6 +4342,7 @@ static bool __flush_work(struct work_struct *work, bool from_cancel)
 
 #ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
 	mk_native_tty_flush_barrier(work, &barr.done);
+	mk_native_spawn_tty_barrier(work, &barr.done);
 #endif
 	wait_for_completion(&barr.done);
 

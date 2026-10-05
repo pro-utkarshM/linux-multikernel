@@ -10,6 +10,53 @@ from pathlib import Path
 import re
 from verify_x86_nested import verify as verify_nested, validate_nested_bundle
 from x86_kmsg import MAX_LOG, validate_blob
+from x86_lockdep import decode_record
+
+SPAWN_MODES = ('spawn-close', 'spawn-hangup', 'spawn-overflow', 'spawn-offline')
+
+
+def verify_spawn_records(mode, held, final):
+    try:
+        number = SPAWN_MODES.index(mode) + 1
+        session = number in (1, 2)
+        for key in ('cookie', 'work'):
+            if (not isinstance(held.get(key), str) or not re.fullmatch(r'[0-9a-f]{1,16}', held[key])
+                    or int(held[key], 16) == 0 or final.get(key) != held[key]):
+                raise ValueError('spawn identity mismatch')
+        for state, done in ((held, False), (final, True)):
+            flags = dict(failed=False, released=done, worker_done=done,
+                         drained=done and session, reopened=done and session,
+                         drain_waiting=not done and session, rx_irq=True)
+            if any(state.get(k) is not v for k, v in flags.items()):
+                raise ValueError('spawn hold/drain/activation/context not proven')
+            counts = dict(mode=number, input=20000 if number == 3 else 32,
+                          copied=16384 if number == 3 else 32,
+                          dropped=3616 if number == 3 else 0,
+                          peak=16384 if number == 3 else 32, discarded=0,
+                          inserted=(16384 if number == 3 else 32) if done else 0,
+                          dequeued=(16384 if number == 3 else 32) if done else (32 if session else 0))
+            if any(type(state.get(k)) is not int or state[k] != v for k, v in counts.items()):
+                raise ValueError('spawn byte accounting or mode mismatch')
+        points = [1, 2, 3, 4, 5, 9, 6, 7, 8] if session else [1, 2, 5, 9, 6]
+        if number == 2:
+            points = [1, 2, 10, 3, 4, 5, 9, 6, 7, 11, 8]
+        events = final['events']
+        if len(events) != len(points) or held['events'] != events[:5 if number == 2 else 4 if session else 2]:
+            raise ValueError('spawn event count/prefix mismatch')
+        for i, (event, point) in enumerate(zip(events, points), 1):
+            if (any(type(event.get(k)) is not int for k in ('seq', 'point', 'cpu'))
+                    or event['seq'] != i or event['point'] != point
+                    or event['cpu'] not in (0, 1, 2)
+                    or event.get('hardirq') is not False or event.get('vector') is not False):
+                raise ValueError('spawn worker sequence/context mismatch')
+        if number == 4:
+            if any(e['cpu'] != 2 for e in events if e['point'] in (1, 2)):
+                raise ValueError('worker not executing on selected offline CPU')
+            if any(e['cpu'] == 2 for e in events if e['point'] in (9, 6)):
+                raise ValueError('worker did not continue away from offline CPU')
+    except (KeyError, ValueError, TypeError) as error:
+        return [str(error)]
+    return []
 
 
 def verify_records(held, final):
@@ -56,14 +103,15 @@ def verify(trace, revision, mode='ipi'):
             matches = list(re.finditer(r'^MK_X86_' + name + r' (.*)$', trace, re.M))
             if len(matches) != 1:
                 raise ValueError(name + ': expected exactly one event')
-            return matches[0].start(), json.loads(matches[0][1])
+            return matches[0].start(), decode_record(matches[0][1])
         begin_at, begin = one('TTY_BEGIN')
         held_at, held = one('TTY_HELD')
         final_at, final = one('TTY_COMPLETE')
         health_at, health = one('TTY_CHILD_HEALTH')
         log_at, log = one('TTY_KMSG_COMPLETE')
-        if (mode not in ('ipi', 'worker') or begin.get('mode', 'ipi') != mode
-                or held['state'].get('mode', 'ipi') != mode):
+        spawn = mode in SPAWN_MODES
+        if (mode not in ('ipi', 'worker') + SPAWN_MODES or begin.get('mode', 'ipi') != mode
+                or not spawn and held['state'].get('mode', 'ipi') != mode):
             raise ValueError('requested MKTTY mode not exercised')
         nonce = one('PING')[1]['nonce']
         child = one('CHILD_ALIVE')[1]
@@ -96,7 +144,22 @@ def verify(trace, revision, mode='ipi'):
                 or health.get('online_cpus') != child['physical_cpus']
                 or any(v['state']['cookie'] != nonce for v in (held, final))):
             raise ValueError('post-reconnect child health/identity not preserved')
-        errors += verify_records(held['state'], final['state'])
+        if spawn:
+            errors += verify_spawn_records(mode, held['state'], final['state'])
+            if mode in ('spawn-close', 'spawn-hangup'):
+                if final.get('fresh') != 'MKTTY_FRESH_' + nonce or final.get('stale') is not False:
+                    raise ValueError('fresh session isolation not demonstrated')
+            else:
+                count = 16384 if mode == 'spawn-overflow' else 32
+                if (type(final.get('received')) is not int or final['received'] != count
+                        or final.get('sha256') != hashlib.sha256(b'X' * count).hexdigest()):
+                    raise ValueError('spawn delivery bytes mismatch')
+            if mode == 'spawn-offline':
+                if (held.get('offline') != [0, 1] or final.get('offline') != [0, 1]
+                        or final.get('restored') != [0, 1, 2]):
+                    raise ValueError('CPU offline did not overlap worker continuation')
+        else:
+            errors += verify_records(held['state'], final['state'])
     except (KeyError, ValueError, TypeError, binascii.Error) as error:
         errors.append(str(error))
     return errors
@@ -107,7 +170,7 @@ def main():
     parser.add_argument('trace', type=Path)
     parser.add_argument('--revision', required=True)
     parser.add_argument('--bundle', type=Path, required=True)
-    parser.add_argument('--mode', choices=('ipi', 'worker'), default='ipi')
+    parser.add_argument('--mode', choices=('ipi', 'worker') + SPAWN_MODES, default='ipi')
     args = parser.parse_args()
     errors = validate_nested_bundle(args.bundle, args.revision, profile='tty')
     errors += verify(args.trace.read_text(errors='replace'), args.revision, args.mode)

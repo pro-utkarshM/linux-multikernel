@@ -101,6 +101,7 @@ do_wait_for_common(struct completion *x,
 			__set_current_state(state);
 #ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
 			mk_native_tty_completion_wait(x);
+			mk_native_spawn_tty_wait(x);
 #endif
 			raw_spin_unlock_irq(&x->wait.lock);
 			timeout = action(timeout);

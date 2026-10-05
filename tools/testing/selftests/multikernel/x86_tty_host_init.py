@@ -12,6 +12,7 @@ from x86_host_init import NAME, cli, marker
 from x86_nested_host_init import main
 from x86_admission_host_init import Console, Operation
 from x86_lockdep import probe_child
+from x86_spawn_tty import MODES, host as spawn_tty
 
 GATE = Path('/sys/kernel/debug/mk-native-concurrency-test')
 
@@ -47,9 +48,15 @@ def tty(fd, pending, nonce, child, spare):
     console = Console(fd, pending, nonce)
     modes = [word.split('=', 1)[1] for word in Path('/proc/cmdline').read_text().split()
              if word.startswith('mk_tty_mode=')]
-    if len(modes) > 1 or modes and modes[0] not in ('ipi', 'worker'):
+    if len(modes) > 1 or modes and modes[0] not in ('ipi', 'worker') + MODES:
         raise RuntimeError('invalid native MKTTY mode')
     mode = modes[0] if modes else 'ipi'
+    if mode in MODES:
+        spawn_tty(console, mode)
+        capture_log(console)
+        console.pending = probe_child(fd, console.pending, nonce)
+        cli('kill', NAME)
+        return console.pending
     os.sched_setaffinity(0, {2})
     marker('TTY_BEGIN', nonce=nonce, mode=mode,
            taint=int(Path('/proc/sys/kernel/tainted').read_text()))

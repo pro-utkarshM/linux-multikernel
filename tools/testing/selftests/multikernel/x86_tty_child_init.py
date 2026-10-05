@@ -17,7 +17,10 @@ capture = None
 
 def command(nonce, fields):
     global capture
-    if fields == {'op': 'burst'}:
+    if set(fields) == {'op', 'mode'} and fields['op'] == 'spawn':
+        from x86_spawn_tty import child
+        child(nonce, fields['mode'])
+    elif fields == {'op': 'burst'}:
         token = ('MKTTY_GATE_' + nonce).encode()
         if os.write(1, token) != len(token):
             raise RuntimeError('short first native TTY write')

@@ -140,7 +140,7 @@ def main():
                    HERE / 'x86_admission_host_init.py', HERE / 'x86_rcu_host_init.py']
     if args.profile == 'tty':
         inputs += [host_init, child_init, HERE / 'verify_x86_tty.py',
-                   HERE / 'x86_admission_host_init.py', HERE / 'x86_kmsg.py']
+                   HERE / 'x86_admission_host_init.py', HERE / 'x86_kmsg.py', HERE / 'x86_spawn_tty.py']
     if args.profile == 'writer':
         inputs += [host_init, child_init, HERE / 'verify_x86_writer.py', HERE / 'x86_admission_host_init.py']
     if args.profile == 'destroy':
@@ -201,6 +201,7 @@ def main():
         install(HERE / 'x86_rcu_host_init.py', 'usr/lib/python3/dist-packages/x86_rcu_host_init.py')
     if args.profile == 'tty':
         install(HERE / 'x86_kmsg.py', 'usr/lib/python3/dist-packages/x86_kmsg.py')
+        install(HERE / 'x86_spawn_tty.py', 'usr/lib/python3/dist-packages/x86_spawn_tty.py')
     (root / 'init').chmod(0o755)
     (root / 'payload/source-revision').write_text(args.revision + '\n')
     # Reuse the same offline Python runtime; the child has no kernel payload.

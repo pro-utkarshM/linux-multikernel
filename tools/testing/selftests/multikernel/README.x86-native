@@ -71,6 +71,40 @@ These are boundary observations, not continuous monitoring or proof of the
 stopped child's final instruction. Kernel diagnostics are still rejected
 independently. Once stopped, a child cannot answer another proc query.
 
+Spawn RX session lanes (test-only integration branch)
+---------------------------------------------------
+Use the existing --profile=tty bundle, eight-CPU x86-tty-host QEMU command,
+and mk_tty_mode=spawn-close, spawn-hangup, spawn-overflow or spawn-offline.
+Pass the same --mode to its frozen verify_x86_tty.py. These modes require
+CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST and the existing boot opt-in/QEMU guard.
+Each is a fresh one-shot VM, never run on a production kernel or host.
+
+Close/hangup holds an actual spawn RX invocation after dequeue and before
+flip insertion, observes the actual cancellation completion wait, then
+releases it. A new TTY session must receive only a fresh nonce-tagged payload.
+Hangup records the real driver entry and final ldisc flush, and keeps an old
+hung-up file open through the freshness verdict so last-close cleanup cannot
+substitute for that flush. The observer requires actual late inserted bytes.
+
+Overflow holds before dequeue, delivers 20000 bytes through the real host TTY,
+and requires 16384 FIFO bytes accepted, 3616 dropped, and exact accepted-byte
+delivery. The expected dropped-input warning is not a lockdep warning.
+
+Offline uses explicitly injected queue_work_on placement on child logical
+CPU2. The same real RX invocation must start there, remain held across
+cpu2/online=0, and continue on another online CPU before CPU2 is restored.
+Ordinary host routing targets the child's first CPU; sender affinity alone
+would not exercise this condition. This lane covers ordinary CPU hotplug,
+not MK ownership transfer, pending-but-never-started work, or every scheduler.
+The nested pool prerequisite still runs separately before each session lane.
+
+TTY_HELD is a snapshot taken before release and printed after stdout is
+available again; kernel event ordering supplies the causal evidence, not its
+serial-print time. All modes retain full child kmsg transfer, live lockdep,
+confirmed halt/unload and host-survival requirements. Observer task references
+are retained for this one-shot VM. All observer hooks are excluded from the
+production submission; no new production ABI is introduced.
+
 This boot slice requires six distinct physical IDs resolved from /proc/cpuinfo:
 two host CPUs, two assigned child CPUs and two spare pool CPUs. The host gives
 the child 512 MiB, loads the real ELF Image plus child initrd, and requires both
