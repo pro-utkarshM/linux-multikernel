@@ -41,8 +41,12 @@ confirmed stopped. A timeout, failed query or STOP_PENDING cannot authorize
 reuse; a STOPPED observation does not cancel outstanding remote start work.
 
 Requested and voluntary shutdown, reboot and panic stop local harts with HSM;
-spawn reset must never reach SRST or legacy shutdown. Panic stops immediately
-regardless of panic_timeout. Parent notification is a separate #28 concern.
+spawn reset must never reach SRST or legacy shutdown. With panic_timeout=0,
+the spawn panic notifier halts immediately rather than leaving the panic CPU
+in the generic infinite wait loop. With a nonzero timeout, the notifier returns
+to the generic panic path: positive values delay restart, while negative values
+restart without that delay. The spawn restart override stops locally in either
+case; it must not reset the host. Parent notification is a separate #28 concern.
 An unexpected HART_STOP return leaves a local wait loop, so the host must fail
 confirmation and retain resources. Ring reset is not a remote-work retirement
 protocol and does not supply #7/session guarantees. Matched revisions and fresh
