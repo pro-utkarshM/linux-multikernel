@@ -76,6 +76,15 @@ class X86ChildGate(unittest.TestCase):
                         'Kernel panic - not syncing: init failed\n'):
             self.assertTrue(self.verify(''.join(self.trace()) + failure))
 
+    def test_debug_diagnostics_cannot_be_hidden_by_pass(self):
+        for failure in ('WARNING: possible circular locking dependency detected\n',
+                        'BUG: sleeping function called from invalid context\n',
+                        'Oops: kernel fault\n', 'general protection fault\n',
+                        'rcu: INFO: rcu_preempt detected stalls on CPUs/tasks:\n',
+                        'watchdog: BUG: soft lockup\n'):
+            with self.subTest(failure=failure):
+                self.assertTrue(self.verify(''.join(self.trace()) + failure))
+
     def test_requested_halt_cannot_qualify_force_halt(self):
         self.assertTrue(self.verify(''.join(self.trace()), halt='force'))
 

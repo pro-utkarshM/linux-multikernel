@@ -23,8 +23,11 @@ def verify(trace, halt='requested', expected_revision=None):
              'UNLOADED', 'HOST_SURVIVED', 'PASS')
     events = {}
     positions = []
-    if 'MK_X86_FAIL' in trace or 'Kernel panic - not syncing:' in trace:
-        errors.append('failure or panic in native trace')
+    if re.search(r'MK_X86_FAIL|Kernel panic - not syncing:|WARNING:|BUG:|Oops:'
+                 r'|general protection fault|detected (?:expedited )?stalls'
+                 r'|fault while parked|watchdog:.*lockup'
+                 r'|rcu:.*(?:self-detected stall|kthread starved)', trace, re.I):
+        errors.append('failure, panic or kernel diagnostic fault in native trace')
     for name in names:
         matches = list(re.finditer(r'^MK_X86_' + name + r' (.*)$', trace, re.M))
         if len(matches) != 1:
