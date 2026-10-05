@@ -62,12 +62,12 @@ def nested(nonce, cpu):
     marker('NESTED_POOL_RETIRED', nonce=nonce, cpu=cpu, **result, **state)
 
 
-def main():
+def main(extra_handler=None, *, profile='nested'):
     if os.getpid() != 1 or platform.machine() != 'x86_64':
         raise RuntimeError('not x86 guest PID 1')
     mount('proc', '/proc', 'proc')
     options = Path('/proc/cmdline').read_text().split()
-    if 'mk_test=x86-nested-child' not in options or 'mk_native_concurrency_test=1' not in options:
+    if f'mk_test=x86-{profile}-child' not in options or 'mk_native_concurrency_test=1' not in options:
         raise RuntimeError('missing nested guest boot guards')
     mount('sysfs', '/sys', 'sysfs')
     require_qemu()
@@ -86,11 +86,13 @@ def main():
            boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip())
     try:
         for line in sys.stdin:
-            fields = line.strip().split()
+            fields = line.strip().split(maxsplit=2)
             if len(fields) == 2 and fields[0] == 'ping':
                 marker('CHILD_REPLY', nonce=fields[1])
             elif len(fields) == 3 and fields[0] == 'nested':
                 nested(fields[1], int(fields[2]))
+            elif extra_handler and len(fields) == 3 and fields[0] == 'process':
+                extra_handler(fields[1], json.loads(fields[2]))
             else:
                 raise RuntimeError('unexpected nested command')
     except Exception as error:

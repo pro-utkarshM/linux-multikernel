@@ -47,7 +47,7 @@ def capture_tail(fd, pending):
     return pending
 
 
-def workload():
+def workload(after_nested=None, *, profile='nested'):
     from kerf.topology import logical_to_apic
     if Path('/sys/devices/system/cpu/online').read_text().strip() != '0-7':
         raise RuntimeError('eight online host CPUs required')
@@ -67,7 +67,7 @@ def workload():
         raise RuntimeError('initial ownership mismatch')
     cli('load', NAME, '--kernel=/payload/vmlinux', '--initrd=/payload/child-initrd.cpio.gz',
         '--console=mktty0', '--cmdline=rdinit=/init panic=0 loglevel=7 '
-        'mk_test=x86-nested-child mk_native_concurrency_test=1')
+        f'mk_test=x86-{profile}-child mk_native_concurrency_test=1')
     status('loaded')
     fd = os.open('/dev/mktty', os.O_RDWR | os.O_NONBLOCK)
     try:
@@ -115,7 +115,11 @@ def workload():
         if not retired:
             raise RuntimeError('nested roundtrip timed out; reclamation prohibited')
         pending = capture_tail(fd, pending)
-        cli('kill', NAME)
+        if after_nested:
+            # The admission callback performs and confirms its drain/halt.
+            pending = after_nested(fd, pending, nonce, child, spare)
+        else:
+            cli('kill', NAME)
         pending = capture_tail(fd, pending)
         if pending:
             print(pending.decode(errors='replace'), flush=True)
@@ -126,17 +130,17 @@ def workload():
         marker('NESTED_HOST_SURVIVED',
                online=Path('/sys/devices/system/cpu/online').read_text().strip(),
                boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip())
-        marker('NESTED_PASS', slice='nested-pool-prerequisite')
+        marker('NESTED_PASS', slice='native-admission' if after_nested else 'nested-pool-prerequisite')
     finally:
         os.close(fd)
 
 
-def main():
+def main(after_nested=None, *, profile='nested'):
     if os.getpid() != 1 or platform.machine() != 'x86_64':
         raise RuntimeError('not x86 guest PID 1')
     mount('proc', '/proc', 'proc')
     options = Path('/proc/cmdline').read_text().split()
-    if 'mk_test=x86-nested-host' not in options or 'mk_native_concurrency_test=1' not in options:
+    if f'mk_test=x86-{profile}-host' not in options or 'mk_native_concurrency_test=1' not in options:
         raise RuntimeError('missing explicit nested host guards')
     mount('sysfs', '/sys', 'sysfs')
     require_qemu()
@@ -146,7 +150,7 @@ def main():
     os.environ.update(PYTHONHOME='/usr', PYTHONPATH='/usr/lib/python3/dist-packages',
                       PYTHONDONTWRITEBYTECODE='1', PATH='/bin:/usr/bin')
     try:
-        workload()
+        workload(after_nested, profile=profile)
     except Exception as error:
         marker('FAIL', error=repr(error))
         subprocess.run(['/bin/busybox', 'dmesg'], timeout=10, check=False)

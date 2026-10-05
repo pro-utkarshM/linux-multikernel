@@ -70,8 +70,8 @@ def dependencies(paths):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--prepare', action='store_true', help='package into a fresh directory; never launch')
-    parser.add_argument('--profile', choices=('halt', 'nested'), default='halt',
-                        help='keep the six-CPU halt lane or select the eight-CPU nested prerequisite')
+    parser.add_argument('--profile', choices=('halt', 'nested', 'admission'), default='halt',
+                        help='six-CPU halt or eight-CPU nested/admission lane')
     parser.add_argument('--revision', help='main-attested full kernel source revision, required to prepare')
     parser.add_argument('--source', type=Path, required=True)
     parser.add_argument('--kernel-build', type=Path, required=True)
@@ -91,7 +91,7 @@ def main():
     required = [line for line in (HERE / 'x86_child.config').read_text().splitlines()
                 if line.startswith('CONFIG_')]
     actual = set(config.read_text().splitlines())
-    if args.profile == 'nested':
+    if args.profile != 'halt':
         required.append('CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST=y')
     missing = [line for line in required if line not in actual]
     if missing:
@@ -121,14 +121,17 @@ def main():
             or proof['source_tree'] != command('git', '-C', str(args.source),
                                                'rev-parse', 'HEAD^{tree}')):
         raise RuntimeError('build provenance names a different source checkout or tree')
-    host_init = HERE / ('x86_nested_host_init.py' if args.profile == 'nested' else 'x86_host_init.py')
-    child_init = HERE / ('x86_nested_child_init.py' if args.profile == 'nested' else 'x86_child_init.py')
+    prefix = 'x86' if args.profile == 'halt' else 'x86_' + args.profile
+    host_init, child_init = (HERE / (prefix + suffix) for suffix in ('_host_init.py', '_child_init.py'))
     inputs = [args.kernel_build / 'arch/x86/boot/bzImage', args.kernel_build / 'vmlinux',
               config, args.kernel_build / 'mk-x86-build.json',
               HERE / 'x86_host_init.py', HERE / 'x86_child_init.py',
               HERE / 'verify_x86_child.py', HERE / 'x86_child.config', Path(__file__).resolve()]
-    if args.profile == 'nested':
-        inputs += [host_init, child_init, HERE / 'verify_x86_nested.py']
+    if args.profile != 'halt':
+        inputs += [HERE / 'x86_nested_host_init.py', HERE / 'x86_nested_child_init.py',
+                   HERE / 'verify_x86_nested.py']
+    if args.profile == 'admission':
+        inputs += [host_init, child_init, HERE / 'verify_x86_admission.py']
     hashes = {str(path.resolve()): digest(path) for path in inputs}
     print(json.dumps({'mode': 'prepare' if args.prepare else 'HOST_DRY_RUN_ONLY',
                       'source_head': source_head, 'artifact_revision': args.revision or 'UNATTESTED',
@@ -173,8 +176,11 @@ def main():
     for library in runtime_libraries:
         install(library, str(library).lstrip('/'))
     install(host_init, 'init')
-    if args.profile == 'nested':
+    if args.profile != 'halt':
         install(HERE / 'x86_host_init.py', 'usr/lib/python3/dist-packages/x86_host_init.py')
+    if args.profile == 'admission':
+        for name in ('x86_nested_host_init.py', 'x86_nested_child_init.py'):
+            install(HERE / name, 'usr/lib/python3/dist-packages/' + name)
     (root / 'init').chmod(0o755)
     (root / 'payload/source-revision').write_text(args.revision + '\n')
     # Reuse the same offline Python runtime; the child has no kernel payload.
@@ -196,8 +202,10 @@ def main():
     pack(child, bundle / 'child-initrd.cpio.gz')
     install(bundle / 'child-initrd.cpio.gz', 'payload/child-initrd.cpio.gz')
     shutil.copy2(HERE / 'verify_x86_child.py', bundle / 'verify_x86_child.py')
-    if args.profile == 'nested':
+    if args.profile != 'halt':
         shutil.copy2(HERE / 'verify_x86_nested.py', bundle / 'verify_x86_nested.py')
+    if args.profile == 'admission':
+        shutil.copy2(HERE / 'verify_x86_admission.py', bundle / 'verify_x86_admission.py')
     install(args.kernel_build / 'vmlinux', 'payload/vmlinux')
     shutil.copy2(args.kernel_build / 'arch/x86/boot/bzImage', bundle / 'bzImage')
     shutil.copy2(config, bundle / 'kernel.config')

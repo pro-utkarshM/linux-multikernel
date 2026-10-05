@@ -47,3 +47,33 @@ PREEMPT_RT, DMA, crash-kexec or physical-hardware proof.
 Run all test_*.py via Python unittest discovery and the existing *_test.sh
 runners. test_verify_x86_nested.py exercises false-pass evidence mutations;
 its fabricated trace is a verifier unit test, never native qualification.
+
+Second gate: native process admission and timeout drain
+------------------------------------------------------
+
+Package the enabled clean build with --profile=admission. Use the same
+eight-CPU QEMU command, replacing mk_test=x86-nested-host with
+mk_test=x86-admission-host and increasing the outer timeout to 360 seconds.
+Run the frozen verify_x86_admission.py with --bundle, --revision and raw log.
+Both VM and verifier must exit zero. This first repeats the nested prerequisite.
+
+The child holds the real controller mutex before an incoming CPU removal,
+then reverses the order: an accepted CPU worker holds the mutex while a real
+local pool overlay waits. Busy ACK, explicit remove retry, re-add and local
+pool retirement use real resource operations, transactions and ownership
+readback. The final case holds an accepted CPU add before ACK past the real
+requester timeout. The parent must retain the CPU and reject active unload;
+requested halt must wait for that accepted work before confirming every CPU.
+
+Process gates are root-only debugfs files under mk-native-concurrency-test.
+Each hold is bounded to 30 seconds; automatic release invalidates the run.
+The fixed event buffer rejects overflow. Native sequence numbers correlate
+debugfs observations, resource request IDs, physical CPUs and ACK results;
+controller transaction IDs are a separate namespace. The hooks never delay
+IRQ handlers. Literal oracle fixtures are not native evidence.
+
+Remote CPU removal while a child-local park allocation still exists is NOT
+covered: the controller-first case retires that allocation before retry;
+the worker-first case removes its CPU before creating the allocation.
+IRQ/RCU callback, MKTTY close, ring writer retirement, lockdep/RT and physical
+hardware qualification remain separate gates; this profile cannot certify them.

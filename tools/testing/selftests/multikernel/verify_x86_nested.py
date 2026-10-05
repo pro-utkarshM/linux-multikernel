@@ -16,7 +16,7 @@ def cpu_set(value, size=None):
             and len(set(value)) == len(value) and value == sorted(value))
 
 
-def verify(trace, expected_revision=None):
+def verify(trace, expected_revision=None, *, admission=False):
     names = ('NESTED_BEGIN', 'CHILD_ALIVE', 'PING', 'CHILD_REPLY',
              'NESTED_POOL_READY', 'NESTED_CPU_RETURNED', 'NESTED_POOL_RETIRED',
              'NESTED_HALTED', 'NESTED_UNLOADED', 'NESTED_HOST_SURVIVED', 'NESTED_PASS')
@@ -118,24 +118,25 @@ def verify(trace, expected_revision=None):
     confirmation = trace.find('Instance 1 (native-child) halted, all CPUs confirmed parked')
     if not positions['NESTED_POOL_RETIRED'] < confirmation < positions['NESTED_HALTED']:
         errors.append('parent did not confirm all CPUs after nested park retirement')
+    final_assigned = sorted(assigned + groups[2][:1]) if admission else assigned
     for name, state in (('NESTED_HALTED', 'loaded'), ('NESTED_UNLOADED', 'ready')):
-        if events[name].get('status') != state or events[name].get('assigned_cpus') != assigned:
+        if events[name].get('status') != state or events[name].get('assigned_cpus') != final_assigned:
             errors.append(f'{name}: reusable state or retained ownership mismatch')
     if events['NESTED_HOST_SURVIVED'].get('online') != '0-2':
         errors.append('host topology not preserved')
-    if events['NESTED_PASS'].get('slice') != 'nested-pool-prerequisite':
+    if events['NESTED_PASS'].get('slice') != ('native-admission' if admission else 'nested-pool-prerequisite'):
         errors.append('wrong qualification slice')
     return errors
 
 
-def validate_nested_bundle(bundle, revision):
+def validate_nested_bundle(bundle, revision, *, profile='nested'):
     errors = validate_bundle(bundle, revision)
     try:
         provenance = json.loads((bundle / 'provenance.json').read_text())
         config = set((bundle / 'kernel.config').read_text().splitlines())
         required = {'CONFIG_MULTIKERNEL=y', 'CONFIG_DEBUG_FS=y',
                     'CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST=y'}
-        if provenance.get('profile') != 'nested' or not required <= config:
+        if provenance.get('profile') != profile or not required <= config:
             errors.append('nested profile/observation configuration missing')
     except (OSError, ValueError, TypeError, AttributeError):
         errors.append('invalid nested profile/configuration')
