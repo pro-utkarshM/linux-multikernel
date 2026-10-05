@@ -21,6 +21,8 @@ struct dentry;
 struct mk_ipi_data;
 struct mk_ipi_handler;
 struct mutex;
+struct mk_instance;
+struct kimage;
 void mk_native_gate_init(struct dentry *directory);
 void mk_native_rcu_init(struct dentry *directory);
 void mk_native_rcu_vector(bool entered);
@@ -36,6 +38,11 @@ void mk_native_tty_init(struct dentry *directory);
 void mk_native_tty_receive(void *conn, void *buffer, u32 id, const char *data, size_t size);
 bool mk_native_tty_close_lock(void *conn, spinlock_t *lock, unsigned long *flags);
 void mk_native_tty_boundary(unsigned long identity, unsigned int point);
+void mk_native_writer_init(struct dentry *directory);
+void mk_native_writer_claim(struct mk_instance *instance, void *data, size_t size);
+bool mk_native_writer_deactivate_lock(struct mk_instance *instance, unsigned long *flags);
+void mk_native_writer_boundary(struct mk_instance *instance, unsigned int point);
+void mk_native_writer_segments(struct mk_instance *instance, struct kimage *image);
 void mk_native_checkpoint(unsigned int point, u64 request, u64 cpu,
 			  int result, unsigned int operation);
 #endif

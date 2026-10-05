@@ -125,8 +125,14 @@ void mk_instance_ipi_deactivate(struct mk_instance *instance)
 
 	lockdep_assert_held(&mk_overlay_mutex);
 	/* Acquiring the lock drains every already-entered ring producer. */
-	raw_spin_lock_irqsave(&instance->ipi_lock, flags);
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	if (!mk_native_writer_deactivate_lock(instance, &flags))
+#endif
+		raw_spin_lock_irqsave(&instance->ipi_lock, flags);
 	instance->ipi_data = NULL;
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	mk_native_writer_boundary(instance, 5);
+#endif
 	raw_spin_unlock_irqrestore(&instance->ipi_lock, flags);
 }
 
@@ -265,6 +271,9 @@ int multikernel_send_ipi_data(int instance_id, void *data, size_t data_size, uns
 
 	/* We've claimed slot 'head', now fill it */
 	slot = &ipi_data->ring.entries[head];
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	mk_native_writer_claim(instance, data, data_size);
+#endif
 
 	slot->sender_cpu = arch_cpu_physical_id(smp_processor_id());
 	slot->type = type;
@@ -279,6 +288,9 @@ int multikernel_send_ipi_data(int instance_id, void *data, size_t data_size, uns
 	 * be looking at it; everything above must be visible first.
 	 */
 	smp_store_release(&slot->data_size, data_size);
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	mk_native_writer_boundary(instance, 4);
+#endif
 	raw_spin_unlock_irqrestore(&instance->ipi_lock, flags);
 
 	mk_arch_send_ipi(target);

@@ -142,3 +142,20 @@ The first two writes contain no newline to avoid terminal output conversion.
 Any deadline, extra event or premature free invalidates the run. Literal
 verifier fixtures cannot qualify native execution. Ring-writer retirement,
 lockdep/RT and physical-hardware evidence remain separate gates.
+
+Ring producer versus loaded-Image unload
+--------------------------------------
+
+Use --profile=writer, mk_test=x86-writer-host and frozen verify_x86_writer.py.
+The real nested child first halts with every assigned CPU confirmed parked.
+A precreated H0 kthread sends an existing-family message through the actual
+ring and holds its claimed slot under ipi_lock. H1 executes Kerf unload:
+only a real failed raw-spin trylock, followed by normal acquisition, counts
+as contention. H2 releases the bounded IRQ-disabled gate. Require publication
+before deactivation before actual Image segment returns; a later real sender
+must receive -ENODEV. Initial send success, nonzero Image/ring identities,
+segment count, exact event ordering and zero host taint are mandatory.
+
+The observer holds no instance reference of its own. This case establishes
+producer exclusion against Image unload, NOT persistent ring-page destruction:
+boot/ring pages survive unload and require a separate final-reference test.

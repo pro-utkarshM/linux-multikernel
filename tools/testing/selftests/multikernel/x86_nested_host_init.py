@@ -50,7 +50,7 @@ def capture_tail(fd, pending):
     return pending
 
 
-def workload(after_nested=None, *, profile='nested'):
+def workload(after_nested=None, *, profile='nested', after_halt=None):
     from kerf.topology import logical_to_apic
     if Path('/sys/devices/system/cpu/online').read_text().strip() != '0-7':
         raise RuntimeError('eight online host CPUs required')
@@ -130,7 +130,10 @@ def workload(after_nested=None, *, profile='nested'):
             print(pending.decode(errors='replace'), flush=True)
             raise RuntimeError('incomplete child diagnostic at confirmed halt; qualification aborted')
         marker('NESTED_HALTED', status=status('loaded'), assigned_cpus=ownership())
-        cli('unload', NAME)
+        if after_halt:
+            pending = after_halt(fd, pending, nonce, child, spare)
+        else:
+            cli('unload', NAME)
         marker('NESTED_UNLOADED', status=status('ready'), assigned_cpus=ownership())
         marker('NESTED_HOST_SURVIVED',
                online=Path('/sys/devices/system/cpu/online').read_text().strip(),
@@ -141,7 +144,7 @@ def workload(after_nested=None, *, profile='nested'):
         os.close(fd)
 
 
-def main(after_nested=None, *, profile='nested'):
+def main(after_nested=None, *, profile='nested', after_halt=None):
     if os.getpid() != 1 or platform.machine() != 'x86_64':
         raise RuntimeError('not x86 guest PID 1')
     mount('proc', '/proc', 'proc')
@@ -156,7 +159,7 @@ def main(after_nested=None, *, profile='nested'):
     os.environ.update(PYTHONHOME='/usr', PYTHONPATH='/usr/lib/python3/dist-packages',
                       PYTHONDONTWRITEBYTECODE='1', PATH='/bin:/usr/bin')
     try:
-        workload(after_nested, profile=profile)
+        workload(after_nested, profile=profile, after_halt=after_halt)
     except Exception as error:
         marker('FAIL', error=repr(error))
         subprocess.run(['/bin/busybox', 'dmesg'], timeout=10, check=False)
