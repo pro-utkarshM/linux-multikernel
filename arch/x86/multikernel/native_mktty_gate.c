@@ -69,13 +69,13 @@ void mk_native_tty_receive(void *conn, void *buffer, u32 id, const char *data, s
 	}
 }
 
-bool mk_native_tty_close_lock(void *conn, spinlock_t *lock, unsigned long *flags)
+bool mk_native_tty_close_lock(void *conn, raw_spinlock_t *lock, unsigned long *flags)
 {
 	if (!smp_load_acquire(&entered) || READ_ONCE(closed) || conn != selected)
 		return false;
-	if (!spin_trylock_irqsave(lock, *flags)) {
+	if (!raw_spin_trylock_irqsave(lock, *flags)) {
 		record(2); /* real failed acquisition, not a closer-start marker */
-		spin_lock_irqsave(lock, *flags);
+		raw_spin_lock_irqsave(lock, *flags);
 	} else {
 		WRITE_ONCE(failed, true);
 	}

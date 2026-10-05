@@ -39,7 +39,7 @@ void mk_native_registry_detached(bool terminal);
 void mk_native_registry_freed(unsigned long identity);
 void mk_native_tty_init(struct dentry *directory);
 void mk_native_tty_receive(void *conn, void *buffer, u32 id, const char *data, size_t size);
-bool mk_native_tty_close_lock(void *conn, spinlock_t *lock, unsigned long *flags);
+bool mk_native_tty_close_lock(void *conn, raw_spinlock_t *lock, unsigned long *flags);
 void mk_native_tty_boundary(unsigned long identity, unsigned int point);
 void mk_native_writer_init(struct dentry *directory);
 void mk_native_writer_claim(struct mk_instance *instance, void *data, size_t size);

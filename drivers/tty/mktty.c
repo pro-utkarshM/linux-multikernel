@@ -20,6 +20,7 @@
  */
 
 #include <linux/console.h>
+#include <linux/workqueue.h>
 #include <linux/miscdevice.h>
 #include <linux/module.h>
 #include <linux/poll.h>
@@ -57,14 +58,15 @@ struct mktty_host_conn {
 	int instance_id;		/* -1 = not connected */
 	struct list_head list;
 	wait_queue_head_t wait;
-	spinlock_t rx_lock;
+	struct work_struct wake_work;
+	raw_spinlock_t rx_lock;
 	char *rx_buf;
 	int rx_head;
 	int rx_tail;
 };
 
 static LIST_HEAD(mktty_host_conns);
-static DEFINE_SPINLOCK(mktty_host_conns_lock);
+static DEFINE_RAW_SPINLOCK(mktty_host_conns_lock);
 static struct mk_ipi_handler *mktty_host_handler;
 
 static struct mktty_host_conn *mktty_find_conn(int instance_id)
@@ -77,6 +79,14 @@ static struct mktty_host_conn *mktty_find_conn(int instance_id)
 			return conn;
 	}
 	return NULL;
+}
+
+static void mktty_host_wake_work(struct work_struct *work)
+{
+	struct mktty_host_conn *conn = container_of(work, struct mktty_host_conn,
+						  wake_work);
+
+	wake_up_interruptible(&conn->wait);
 }
 
 static int mktty_host_open(struct inode *inode, struct file *filp)
@@ -96,13 +106,14 @@ static int mktty_host_open(struct inode *inode, struct file *filp)
 
 	conn->instance_id = -1;
 	init_waitqueue_head(&conn->wait);
-	spin_lock_init(&conn->rx_lock);
+	INIT_WORK(&conn->wake_work, mktty_host_wake_work);
+	raw_spin_lock_init(&conn->rx_lock);
 	conn->rx_head = 0;
 	conn->rx_tail = 0;
 
-	spin_lock_irqsave(&mktty_host_conns_lock, flags);
+	raw_spin_lock_irqsave(&mktty_host_conns_lock, flags);
 	list_add(&conn->list, &mktty_host_conns);
-	spin_unlock_irqrestore(&mktty_host_conns_lock, flags);
+	raw_spin_unlock_irqrestore(&mktty_host_conns_lock, flags);
 
 	filp->private_data = conn;
 	return 0;
@@ -117,13 +128,15 @@ static int mktty_host_release(struct inode *inode, struct file *filp)
 
 	if (!mk_native_tty_close_lock(conn, &mktty_host_conns_lock, &flags))
 #endif
-		spin_lock_irqsave(&mktty_host_conns_lock, flags);
+		raw_spin_lock_irqsave(&mktty_host_conns_lock, flags);
 	list_del(&conn->list);
 #ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
 	mk_native_tty_boundary(identity, 6);
 #endif
-	spin_unlock_irqrestore(&mktty_host_conns_lock, flags);
+	raw_spin_unlock_irqrestore(&mktty_host_conns_lock, flags);
 
+	/* Unlink excludes new enqueues; do not wait while holding either raw lock. */
+	flush_work(&conn->wake_work);
 	kfree(conn->rx_buf);
 #ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
 	mk_native_tty_boundary(identity, 7);
@@ -147,22 +160,22 @@ static ssize_t mktty_host_read(struct file *filp, char __user *buf,
 		return -ENOTCONN;
 
 	while (copied == 0) {
-		spin_lock_irqsave(&conn->rx_lock, flags);
+		raw_spin_lock_irqsave(&conn->rx_lock, flags);
 
 		while (copied < count && conn->rx_head != conn->rx_tail) {
 			char c = conn->rx_buf[conn->rx_tail];
 			conn->rx_tail = (conn->rx_tail + 1) % MKTTY_RX_BUF_SIZE;
-			spin_unlock_irqrestore(&conn->rx_lock, flags);
+			raw_spin_unlock_irqrestore(&conn->rx_lock, flags);
 
 			if (put_user(c, buf + copied)) {
 				return copied > 0 ? copied : -EFAULT;
 			}
 			copied++;
 
-			spin_lock_irqsave(&conn->rx_lock, flags);
+			raw_spin_lock_irqsave(&conn->rx_lock, flags);
 		}
 
-		spin_unlock_irqrestore(&conn->rx_lock, flags);
+		raw_spin_unlock_irqrestore(&conn->rx_lock, flags);
 
 		if (copied > 0)
 			break;
@@ -213,13 +226,13 @@ static ssize_t mktty_host_write(struct file *filp, const char __user *buf,
 		mk_instance_put(instance);
 
 		/* Publish once under the callback's lookup/lifetime lock. */
-		spin_lock_irqsave(&mktty_host_conns_lock, flags);
+		raw_spin_lock_irqsave(&mktty_host_conns_lock, flags);
 		if (conn->instance_id >= 0) {
-			spin_unlock_irqrestore(&mktty_host_conns_lock, flags);
+			raw_spin_unlock_irqrestore(&mktty_host_conns_lock, flags);
 			return -EISCONN;
 		}
 		WRITE_ONCE(conn->instance_id, id);
-		spin_unlock_irqrestore(&mktty_host_conns_lock, flags);
+		raw_spin_unlock_irqrestore(&mktty_host_conns_lock, flags);
 		pr_info("mktty: fd connected to instance %d\n", id);
 		return count;
 	}
@@ -268,10 +281,10 @@ static __poll_t mktty_host_poll(struct file *filp, poll_table *wait)
 
 	poll_wait(filp, &conn->wait, wait);
 
-	spin_lock_irqsave(&conn->rx_lock, flags);
+	raw_spin_lock_irqsave(&conn->rx_lock, flags);
 	if (conn->rx_head != conn->rx_tail)
 		mask |= EPOLLIN | EPOLLRDNORM;
-	spin_unlock_irqrestore(&conn->rx_lock, flags);
+	raw_spin_unlock_irqrestore(&conn->rx_lock, flags);
 
 	mask |= EPOLLOUT | EPOLLWRNORM;
 	return mask;
@@ -303,17 +316,18 @@ static void mktty_host_ipi_handler(struct mk_ipi_data *data, void *ctx)
 		return;
 	if (msg->type != MKTTY_MSG_OUTPUT)
 		return;
-	if (msg->len > MKTTY_MAX_DATA)
+	if (msg->len > MKTTY_MAX_DATA ||
+	    msg->len > data->data_size - (sizeof(*msg) - MKTTY_MAX_DATA))
 		return;
 
-	spin_lock_irqsave(&mktty_host_conns_lock, flags);
+	raw_spin_lock_irqsave(&mktty_host_conns_lock, flags);
 	conn = mktty_find_conn(msg->console_id);
 #ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
 	mk_native_tty_receive(conn, conn ? conn->rx_buf : NULL, msg->console_id,
 			      msg->data, msg->len);
 #endif
 	if (conn) {
-		spin_lock(&conn->rx_lock);
+		raw_spin_lock(&conn->rx_lock);
 		for (i = 0; i < msg->len; i++) {
 			space = (conn->rx_tail - conn->rx_head - 1 + MKTTY_RX_BUF_SIZE) % MKTTY_RX_BUF_SIZE;
 			if (space == 0)
@@ -321,13 +335,14 @@ static void mktty_host_ipi_handler(struct mk_ipi_data *data, void *ctx)
 			conn->rx_buf[conn->rx_head] = msg->data[i];
 			conn->rx_head = (conn->rx_head + 1) % MKTTY_RX_BUF_SIZE;
 		}
-		spin_unlock(&conn->rx_lock);
-		wake_up_interruptible(&conn->wait);
+		raw_spin_unlock(&conn->rx_lock);
+		/* Queue before dropping the lookup/lifetime lock, never after it. */
+		schedule_work(&conn->wake_work);
 #ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
 		mk_native_tty_boundary((unsigned long)conn, 4);
 #endif
 	}
-	spin_unlock_irqrestore(&mktty_host_conns_lock, flags);
+	raw_spin_unlock_irqrestore(&mktty_host_conns_lock, flags);
 }
 
 static int mktty_host_init(void)
