@@ -62,7 +62,11 @@ def pool_cpus():
     state = json.loads(Path('/sys/kernel/debug/mk-native-concurrency-test/local_snapshot').read_text())
     if state['instance'] != 0:
         raise RuntimeError('not parent pool snapshot')
-    return state['pool_cpus']
+    ids = state['pool_cpus']
+    if (not isinstance(ids, list) or any(type(cpu) is not int or not 0 <= cpu < (1 << 64) - 1
+                                        for cpu in ids) or len(set(ids)) != len(ids)):
+        raise RuntimeError('invalid parent physical CPU set')
+    return sorted(ids)
 
 
 class Console:

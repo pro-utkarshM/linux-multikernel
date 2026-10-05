@@ -5,10 +5,22 @@ import importlib.util
 import json
 from pathlib import Path
 import unittest
+from unittest import mock
 import test_verify_x86_nested as nested_fixture
 
 
 class AdmissionGate(unittest.TestCase):
+    def test_parent_pool_readback_is_a_canonical_physical_set(self):
+        import x86_admission_host_init as host
+        with mock.patch.object(Path, 'read_text', return_value=json.dumps(
+                dict(instance=0, pool_cpus=[6, 7, 5]))):
+            self.assertEqual(host.pool_cpus(), [5, 6, 7])
+        for ids in ([5, 5], [True, 6], [-1, 6]):
+            with self.subTest(ids=ids), mock.patch.object(Path, 'read_text', return_value=json.dumps(
+                    dict(instance=0, pool_cpus=ids))):
+                with self.assertRaises(RuntimeError):
+                    host.pool_cpus()
+
     def verify(self, text):
         path = Path(__file__).with_name('verify_x86_admission.py')
         self.assertTrue(path.is_file(), 'admission verifier missing')
