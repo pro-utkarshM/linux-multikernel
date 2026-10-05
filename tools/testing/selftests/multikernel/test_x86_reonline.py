@@ -2,11 +2,25 @@
 # SPDX-License-Identifier: GPL-2.0
 """The diagnostic must not turn missing/error/uncorrelated evidence into success."""
 import unittest
+from pathlib import Path
+import tempfile
 
 import x86_reonline
 
 
 class ReonlineVerdictTest(unittest.TestCase):
+    def test_diagnostic_reports_disabled_lockdep_without_qualifying_it(self):
+        self.assertTrue(callable(getattr(x86_reonline, 'diagnostic_debug_locks', None)))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'stats'
+            for value in (0, 1):
+                path.write_text(f'debug_locks: {value}\n')
+                self.assertEqual(x86_reonline.diagnostic_debug_locks(path), value)
+            for malformed in ('', 'debug_locks: 2\n', 'debug_locks: 1\ndebug_locks: 0\n'):
+                path.write_text(malformed)
+                with self.assertRaises(ValueError):
+                    x86_reonline.diagnostic_debug_locks(path)
+
     def record(self, phase, **extra):
         return dict(nonce='0123456789abcdef', phase=phase, cpu=1,
                     physical_cpu=3, **extra)

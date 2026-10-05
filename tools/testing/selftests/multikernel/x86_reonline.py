@@ -9,6 +9,14 @@ import select
 import time
 
 
+def diagnostic_debug_locks(path=Path('/proc/lockdep_stats')):
+    fields = [line.strip() for line in path.read_text().splitlines()
+              if re.match(r'\s*debug_locks\s*:', line)]
+    if len(fields) != 1 or not re.fullmatch(r'debug_locks:\s+[01]', fields[0]):
+        raise ValueError('missing or malformed diagnostic lockdep state')
+    return int(fields[0].split(':')[1])
+
+
 def classify(records, nonce):
     if not re.fullmatch(r'[0-9a-f]{16}', nonce) or len(records) != 3:
         raise ValueError('incomplete re-online evidence')
@@ -37,6 +45,7 @@ def child_probe(nonce, marker):
     # explicitly confined even if this module is accidentally reused.
     if (os.getpid() != 1 or not re.fullmatch(r'[0-9a-f]{16}', nonce)
             or 'mk_test=x86-child' not in Path('/proc/cmdline').read_text().split()
+            or 'mk_cpu_reonline_probe=1' not in Path('/proc/cmdline').read_text().split()
             or Path('/sys/class/dmi/id/sys_vendor').read_text().strip() != 'QEMU'):
         raise RuntimeError('not the explicitly opted-in disposable child')
     from kerf.topology import logical_to_apic

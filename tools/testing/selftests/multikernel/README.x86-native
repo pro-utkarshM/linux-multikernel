@@ -176,3 +176,7 @@ aborts the host workload before halt/unload; the disposable VM then ends.
 This diagnostic is not a pool-return pass or a safe-reclamation qualification.
 Keep its failed raw trace and compare an independently pinned baseline. The
 normal halt verifier must still fail on a failed re-online diagnostic.
+The diagnostic forwards mk_cpu_reonline_probe=1 and reports a disabled child
+debug_locks value honestly rather than stopping before the probe. A zero value
+or any kernel diagnostic remains a failure under the unchanged halt verifier;
+the override is never used in ordinary qualification runs.

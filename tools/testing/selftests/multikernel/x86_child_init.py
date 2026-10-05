@@ -45,8 +45,14 @@ def main():
         os.dup2(fd, target)
     if fd > 2:
         os.close(fd)
+    lockdep = read_debug_locks
+    if 'mk_cpu_reonline_probe=1' in Path('/proc/cmdline').read_text().split():
+        # Attribution only: expose baseline debug_locks=0 honestly. The normal
+        # frozen verifier still rejects it; never relax acceptance boundaries.
+        from x86_reonline import diagnostic_debug_locks
+        lockdep = diagnostic_debug_locks
     marker('CHILD_ALIVE', pid=os.getpid(), instance=1,
-           debug_locks=read_debug_locks(),
+           debug_locks=lockdep(),
            online=Path('/sys/devices/system/cpu/online').read_text().strip(),
            physical_cpus=sorted(logical_to_apic().values()),
            boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip(),

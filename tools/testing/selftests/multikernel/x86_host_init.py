@@ -206,9 +206,10 @@ def workload():
         '--memory=512MB')
     assert ownership() == child
     status('ready')
+    diagnostic = ' mk_cpu_reonline_probe=1' if options.get('mk_x86_reonline') == '1' else ''
     cli('load', NAME, '--kernel=/payload/vmlinux',
         '--initrd=/payload/child-initrd.cpio.gz', '--console=mktty0',
-        '--cmdline=rdinit=/init panic=0 loglevel=7 mk_test=x86-child')
+        '--cmdline=rdinit=/init panic=0 loglevel=7 mk_test=x86-child' + diagnostic)
     status('loaded')
     fd = os.open('/dev/mktty', os.O_RDWR | os.O_NONBLOCK)
     try:
