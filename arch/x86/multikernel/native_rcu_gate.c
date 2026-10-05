@@ -42,6 +42,11 @@ void mk_native_rcu_vector(bool value)
 	this_cpu_write(in_native_vector, value);
 }
 
+bool mk_native_in_vector(void)
+{
+	return in_hardirq() && this_cpu_read(in_native_vector);
+}
+
 static void record(unsigned int point)
 {
 	unsigned int index = atomic_inc_return(&sequence) - 1;

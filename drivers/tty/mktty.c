@@ -27,6 +27,9 @@
 #include <linux/tty.h>
 #include <linux/tty_flip.h>
 #include <linux/multikernel.h>
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+#include <asm/multikernel_test.h>
+#endif
 
 #define MKTTY_IPI_TYPE		0x4D4B5459U	/* "MKTY" */
 #define MKTTY_MAX_DATA		(MK_MAX_DATA_SIZE - 16)
@@ -109,13 +112,26 @@ static int mktty_host_release(struct inode *inode, struct file *filp)
 {
 	struct mktty_host_conn *conn = filp->private_data;
 	unsigned long flags;
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	unsigned long identity = (unsigned long)conn;
 
-	spin_lock_irqsave(&mktty_host_conns_lock, flags);
+	if (!mk_native_tty_close_lock(conn, &mktty_host_conns_lock, &flags))
+#endif
+		spin_lock_irqsave(&mktty_host_conns_lock, flags);
 	list_del(&conn->list);
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	mk_native_tty_boundary(identity, 6);
+#endif
 	spin_unlock_irqrestore(&mktty_host_conns_lock, flags);
 
 	kfree(conn->rx_buf);
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	mk_native_tty_boundary(identity, 7);
+#endif
 	kfree(conn);
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	mk_native_tty_boundary(identity, 8);
+#endif
 	return 0;
 }
 
@@ -292,6 +308,10 @@ static void mktty_host_ipi_handler(struct mk_ipi_data *data, void *ctx)
 
 	spin_lock_irqsave(&mktty_host_conns_lock, flags);
 	conn = mktty_find_conn(msg->console_id);
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	mk_native_tty_receive(conn, conn ? conn->rx_buf : NULL, msg->console_id,
+			      msg->data, msg->len);
+#endif
 	if (conn) {
 		spin_lock(&conn->rx_lock);
 		for (i = 0; i < msg->len; i++) {
@@ -303,6 +323,9 @@ static void mktty_host_ipi_handler(struct mk_ipi_data *data, void *ctx)
 		}
 		spin_unlock(&conn->rx_lock);
 		wake_up_interruptible(&conn->wait);
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+		mk_native_tty_boundary((unsigned long)conn, 4);
+#endif
 	}
 	spin_unlock_irqrestore(&mktty_host_conns_lock, flags);
 }

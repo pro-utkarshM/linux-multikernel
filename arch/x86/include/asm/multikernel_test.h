@@ -2,6 +2,7 @@
 #ifndef _ASM_X86_MULTIKERNEL_TEST_H
 #define _ASM_X86_MULTIKERNEL_TEST_H
 #include <linux/types.h>
+#include <linux/spinlock_types.h>
 /* Disposable test branch only; no wire operation or production ABI. */
 enum mk_native_point {
 	MK_NATIVE_CONTROLLER_LOCKED = 1,
@@ -23,6 +24,7 @@ struct mutex;
 void mk_native_gate_init(struct dentry *directory);
 void mk_native_rcu_init(struct dentry *directory);
 void mk_native_rcu_vector(bool entered);
+bool mk_native_in_vector(void);
 void mk_native_rcu_boundary(unsigned long handler, unsigned int point);
 void mk_native_rcu_consumed(unsigned int type, size_t size, u64 cookie);
 u64 mk_native_rcu_tag(struct mk_ipi_data *data);
@@ -30,6 +32,10 @@ bool mk_native_registry_lock(struct mutex *lock);
 void mk_native_registry_published(void *ctx, struct mk_ipi_handler *handler, void *type);
 void mk_native_registry_detached(bool terminal);
 void mk_native_registry_freed(unsigned long identity);
+void mk_native_tty_init(struct dentry *directory);
+void mk_native_tty_receive(void *conn, void *buffer, u32 id, const char *data, size_t size);
+bool mk_native_tty_close_lock(void *conn, spinlock_t *lock, unsigned long *flags);
+void mk_native_tty_boundary(unsigned long identity, unsigned int point);
 void mk_native_checkpoint(unsigned int point, u64 request, u64 cpu,
 			  int result, unsigned int operation);
 #endif

@@ -122,3 +122,23 @@ leaves the instance ACTIVE with its assigned CPUs and memory retained; the
 host reports survival and discards the VM. It MUST NOT be described as safe
 instance reclamation or ordinary shutdown after cleanup. These tests still
 do not qualify MKTTY final close, ring writers, lockdep/RT or real hardware.
+
+MKTTY selected receive versus last close
+---------------------------------------
+
+Use --profile=tty, mk_test=x86-tty-host and frozen verify_x86_tty.py. After
+the nested prerequisite, the child sends one nonce-tagged OUTPUT. H0 holds
+its actual RX callback with the connection-list lock held; H1 closes the
+only host console file reference. Only a real failed lock acquisition counts
+as contention. H2 releases the bounded two-second IRQ gate. Require RX's last
+connection access/wakeup before close acquires the lock, unlinks the selected
+connection, and frees its RX buffer and connection. Observation retains only
+pointer identities and never dereferences freed memory.
+
+A second real OUTPUT must reach the native vector and find no connection.
+Only then reopen the console; require unchanged child boot identity, expected
+online CPUs and zero host/child taint before ordinary confirmed halt/unload.
+The first two writes contain no newline to avoid terminal output conversion.
+Any deadline, extra event or premature free invalidates the run. Literal
+verifier fixtures cannot qualify native execution. Ring-writer retirement,
+lockdep/RT and physical-hardware evidence remain separate gates.
