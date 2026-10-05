@@ -27,6 +27,9 @@
 #include <linux/workqueue.h>
 #include <linux/wait.h>
 #include "internal.h"
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+#include <asm/multikernel_test.h>
+#endif
 
 static const char mk_mem_resource_name[] = "System RAM (multikernel)";
 
@@ -141,7 +144,13 @@ void mk_hotplug_quiesce(void)
 	raw_spin_lock_irqsave(&mk_cpu_hotplug_lock, flags);
 	mk_hotplug_accepting = false;
 	raw_spin_unlock_irqrestore(&mk_cpu_hotplug_lock, flags);
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	mk_native_checkpoint(MK_NATIVE_QUIESCE_CLOSED, 0, 0, 0, 0);
+#endif
 	wait_event(mk_hotplug_wait, mk_hotplug_idle());
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	mk_native_checkpoint(MK_NATIVE_QUIESCE_DRAINED, 0, 0, 0, 0);
+#endif
 }
 
 static struct workqueue_struct *mk_cpu_hotplug_detach(void)
@@ -347,9 +356,20 @@ static void mk_cpu_add_work_fn(struct work_struct *work)
 	/* A controller may hold this lock while waiting for a remote ACK. */
 	ret = -EBUSY;
 	if (mutex_trylock(&mk_overlay_mutex)) {
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+		mk_native_checkpoint(MK_NATIVE_CPU_LOCKED, hp_work->msg_id,
+				     hp_work->cpu_id, 0, hp_work->operation);
+#endif
 		ret = mk_do_cpu_add(hp_work->cpu_id, hp_work->numa_node, hp_work->flags);
 		mutex_unlock(&mk_overlay_mutex);
 	}
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	if (ret == -EBUSY)
+		mk_native_checkpoint(MK_NATIVE_CPU_BUSY, hp_work->msg_id,
+				     hp_work->cpu_id, ret, hp_work->operation);
+	mk_native_checkpoint(MK_NATIVE_CPU_BEFORE_ACK, hp_work->msg_id,
+			     hp_work->cpu_id, ret, hp_work->operation);
+#endif
 
 	/* Send ACK back to sender */
 	ack.operation = hp_work->operation;
@@ -358,6 +378,10 @@ static void mk_cpu_add_work_fn(struct work_struct *work)
 
 	ack_ret = mk_send_message_id(hp_work->sender_instance_id, MK_MSG_RESOURCE,
 				     MK_RES_ACK, hp_work->msg_id, &ack, sizeof(ack));
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	mk_native_checkpoint(MK_NATIVE_CPU_ACK_SENT, hp_work->msg_id,
+			     hp_work->cpu_id, ack_ret, hp_work->operation);
+#endif
 	if (ack_ret < 0) {
 		pr_warn("Multikernel hotplug: Failed to send ACK for CPU %llu: %d\n",
 			hp_work->cpu_id, ack_ret);
@@ -375,9 +399,20 @@ static void mk_cpu_remove_work_fn(struct work_struct *work)
 
 	ret = -EBUSY;
 	if (mutex_trylock(&mk_overlay_mutex)) {
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+		mk_native_checkpoint(MK_NATIVE_CPU_LOCKED, hp_work->msg_id,
+				     hp_work->cpu_id, 0, hp_work->operation);
+#endif
 		ret = mk_do_cpu_remove(hp_work->cpu_id);
 		mutex_unlock(&mk_overlay_mutex);
 	}
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	if (ret == -EBUSY)
+		mk_native_checkpoint(MK_NATIVE_CPU_BUSY, hp_work->msg_id,
+				     hp_work->cpu_id, ret, hp_work->operation);
+	mk_native_checkpoint(MK_NATIVE_CPU_BEFORE_ACK, hp_work->msg_id,
+			     hp_work->cpu_id, ret, hp_work->operation);
+#endif
 
 	/* Send ACK back to sender */
 	ack.operation = hp_work->operation;
@@ -386,6 +421,10 @@ static void mk_cpu_remove_work_fn(struct work_struct *work)
 
 	ack_ret = mk_send_message_id(hp_work->sender_instance_id, MK_MSG_RESOURCE,
 				     MK_RES_ACK, hp_work->msg_id, &ack, sizeof(ack));
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	mk_native_checkpoint(MK_NATIVE_CPU_ACK_SENT, hp_work->msg_id,
+			     hp_work->cpu_id, ack_ret, hp_work->operation);
+#endif
 	if (ack_ret < 0) {
 		pr_warn("Multikernel hotplug: Failed to send ACK for CPU %llu: %d\n",
 			hp_work->cpu_id, ack_ret);

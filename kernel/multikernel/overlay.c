@@ -81,6 +81,9 @@ static LIST_HEAD(mk_overlay_tx_list);            /* List of all transactions */
  * cannot use the instance pool while a controller resource writer changes it.
  * Two writers would otherwise run pool moves at once.
  */
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+#include <asm/multikernel_test.h>
+#endif
 DEFINE_MUTEX(mk_overlay_mutex);
 static atomic_t mk_overlay_next_id = ATOMIC_INIT(1); /* Next transaction ID */
 
@@ -1407,7 +1410,13 @@ static int mk_overlay_apply(const void *dtbo_data, size_t dtbo_size)
 	pr_info("Applying overlay transaction %d (target=%s, resources=%s)\n",
 		tx->id, tx->target_path, tx->resources);
 
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	mk_native_checkpoint(MK_NATIVE_CONTROLLER_ATTEMPT, tx->id, 0, 0, 0);
+#endif
 	guard(mutex)(&mk_overlay_mutex);
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	mk_native_checkpoint(MK_NATIVE_CONTROLLER_LOCKED, tx->id, 0, 0, 0);
+#endif
 
 	ret = mk_overlay_parse_and_apply(tx, dtbo_data);
 

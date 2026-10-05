@@ -8,6 +8,7 @@
 #include <linux/mutex.h>
 #include <linux/seq_file.h>
 #include <linux/string.h>
+#include <asm/multikernel_test.h>
 
 static bool enabled;
 
@@ -86,6 +87,7 @@ static int __init concurrency_init(void)
 		return PTR_ERR(directory);
 	debugfs_create_file("local_snapshot", 0400, directory, NULL,
 			    &local_snapshot_fops);
+	mk_native_gate_init(directory);
 	return 0;
 }
 late_initcall(concurrency_init);
