@@ -145,10 +145,11 @@ def verify(trace, expected_revision=None):
                 owned = child
             else:
                 waiting = one('ADMISSION_CONTROLLER_WAITING', mode)
-                if waiting.get('active') is not True or observed(waiting['event']) != attempt:
+                contended = checkpoint(12, done['transaction'], 0, 0)
+                if waiting.get('active') is not True or observed(waiting['event']) != contended:
                     raise ValueError('controller was not observed blocked')
                 removed_events = worker(enter['request'], child[-1], 8194)
-                order(removed_events[0], enter, attempt, leave, ctl)
+                order(removed_events[0], enter, attempt, contended, leave, ctl)
                 order(leave, removed_events[1])
                 owned = child[:-1]
             retirement = one('ADMISSION_RETIRED', mode)
@@ -188,7 +189,7 @@ def verify(trace, expected_revision=None):
         closed = observed(waiting['closed'])
         drained = checkpoint(7)
         if (waiting.get('active') is not True or observed(waiting['held']) != enter
-                or closed['point'] != 6):
+                or closed['point'] != 6 or waiting.get('drain_sleeping') is not True):
             raise ValueError('actual quiescence wait missing')
         order(entered, before, enter, closed, leave, ack, drained)
         retained = one('ADMISSION_TIMEOUT_RETAINED')

@@ -85,6 +85,11 @@ static LIST_HEAD(mk_overlay_tx_list);            /* List of all transactions */
 #include <asm/multikernel_test.h>
 #endif
 DEFINE_MUTEX(mk_overlay_mutex);
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+DEFINE_GUARD(mk_native_overlay, unsigned int,
+	     mk_native_controller_lock(&mk_overlay_mutex, _T),
+	     mutex_unlock(&mk_overlay_mutex));
+#endif
 static atomic_t mk_overlay_next_id = ATOMIC_INIT(1); /* Next transaction ID */
 
 /* Forward declarations */
@@ -1412,8 +1417,10 @@ static int mk_overlay_apply(const void *dtbo_data, size_t dtbo_size)
 
 #ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
 	mk_native_checkpoint(MK_NATIVE_CONTROLLER_ATTEMPT, tx->id, 0, 0, 0);
-#endif
+	guard(mk_native_overlay)(tx->id);
+#else
 	guard(mutex)(&mk_overlay_mutex);
+#endif
 #ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
 	mk_native_checkpoint(MK_NATIVE_CONTROLLER_LOCKED, tx->id, 0, 0, 0);
 #endif

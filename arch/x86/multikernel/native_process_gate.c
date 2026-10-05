@@ -3,7 +3,9 @@
 #include <linux/debugfs.h>
 #include <linux/interrupt.h>
 #include <linux/module.h>
+#include <linux/mutex.h>
 #include <linux/multikernel.h>
+#include <linux/sched/task.h>
 #include <linux/seq_file.h>
 #include <linux/slab.h>
 #include <linux/uaccess.h>
@@ -22,6 +24,9 @@ static struct native_event events[128];
 static u64 sequence, gate_cpu;
 static unsigned int event_count, armed, active_point, gate_seconds;
 static bool gate_active, gate_released, overflow;
+/* Task-only observation pin, retained in this disposable one-shot VM. */
+static struct task_struct *drain_task;
+static bool drain_waiting;
 
 static void record_event(unsigned int point, u64 request, u64 cpu,
 			 int result, unsigned int operation)
@@ -72,6 +77,35 @@ void mk_native_checkpoint(unsigned int point, u64 request, u64 cpu,
 	raw_spin_lock_irqsave(&event_lock, flags);
 	gate_active = false;
 	active_point = 0;
+	raw_spin_unlock_irqrestore(&event_lock, flags);
+}
+
+void mk_native_controller_lock(struct mutex *lock, u64 request)
+{
+	if (available) {
+		if (mutex_trylock(lock))
+			return;
+		record_event(MK_NATIVE_CONTROLLER_CONTENDED, request, 0, 0, 0);
+	}
+	mutex_lock(lock);
+}
+
+void mk_native_drain_wait(bool waiting)
+{
+	unsigned long flags;
+
+	if (!available)
+		return;
+	/* Called by wait_event_cmd after prepare_to_wait, never print or sleep. */
+	raw_spin_lock_irqsave(&event_lock, flags);
+	if (!drain_task) {
+		get_task_struct(current);
+		drain_task = current;
+	}
+	if (drain_task == current)
+		drain_waiting = waiting;
+	else
+		overflow = true;
 	raw_spin_unlock_irqrestore(&event_lock, flags);
 }
 
@@ -135,7 +169,7 @@ static int events_show(struct seq_file *seq, void *unused)
 	struct native_event *copy;
 	unsigned long flags;
 	unsigned int count, point, i;
-	bool active, lost;
+	bool active, lost, draining;
 
 	copy = kmalloc_array(ARRAY_SIZE(events), sizeof(*copy), GFP_KERNEL);
 	if (!copy)
@@ -146,9 +180,13 @@ static int events_show(struct seq_file *seq, void *unused)
 	active = gate_active;
 	point = active_point;
 	lost = overflow;
+	/* Phase publication and task-state sample are ordered by event_lock. */
+	draining = drain_waiting && drain_task &&
+		(READ_ONCE(drain_task->__state) & TASK_UNINTERRUPTIBLE);
 	raw_spin_unlock_irqrestore(&event_lock, flags);
-	seq_printf(seq, "{\"active\":%s,\"point\":%u,\"overflow\":%s,\"events\":[",
-		   active ? "true" : "false", point, lost ? "true" : "false");
+	seq_printf(seq, "{\"active\":%s,\"point\":%u,\"overflow\":%s,\"drain_sleeping\":%s,\"events\":[",
+		   active ? "true" : "false", point, lost ? "true" : "false",
+		   draining ? "true" : "false");
 	for (i = 0; i < count; i++) {
 		struct native_event *event = &copy[i];
 		seq_printf(seq, "%s{\"seq\":%llu,\"point\":%u,\"request\":%llu,\"cpu\":%llu,\"result\":%d,\"operation\":%u}",

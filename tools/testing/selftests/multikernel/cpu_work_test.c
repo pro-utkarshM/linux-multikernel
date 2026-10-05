@@ -43,6 +43,10 @@ static bool mk_overlay_mutex;
 #define wake_up_all(wait) ((void)(wait))
 #define wait_event(wait, condition) \
 	do { (void)(wait); while (!(condition)) run_wait_jobs(); } while (0)
+/* Controlled scheduler boundary; native task-state observation needs QEMU. */
+#define wait_event_cmd(wait, condition, before, after) \
+	do { (void)(wait); while (!(condition)) { before; run_wait_jobs(); after; } } while (0)
+static void mk_native_drain_wait(bool waiting) { (void)waiting; }
 #define PCI_SLOT(devfn) (((devfn) >> 3) & 0x1f)
 #define PCI_FUNC(devfn) ((devfn) & 7)
 #define strscpy(dst, src, size) snprintf(dst, size, "%s", src)

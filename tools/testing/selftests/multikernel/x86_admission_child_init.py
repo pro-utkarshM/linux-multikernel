@@ -68,7 +68,7 @@ class Admission:
             return
         elif op == 'waiting':
             def waiting(state):
-                events = [e for e in state['events'] if e['seq'] > self.held['seq'] and e['point'] == 8]
+                events = [e for e in state['events'] if e['seq'] > self.held['seq'] and e['point'] == 12]
                 if events and state['active']:
                     request = events[0]['request']
                     if any(e['point'] == 1 and e['request'] == request for e in state['events']):
@@ -107,9 +107,11 @@ class Admission:
                 closed = [e for e in state['events'] if e['point'] == 6 and e['seq'] > self.held['seq']]
                 if any(e['point'] == 7 for e in state['events']):
                     raise RuntimeError('quiescence completed before accepted work retired')
-                return closed[0] if state['active'] and len(closed) == 1 else None
+                return closed[0] if (state['active'] and state['drain_sleeping']
+                                     and len(closed) == 1) else None
             closed = self.wait(draining)
-            marker('ADMISSION_DRAIN_WAITING', nonce=nonce, closed=closed, held=self.held, active=True)
+            marker('ADMISSION_DRAIN_WAITING', nonce=nonce, closed=closed,
+                   held=self.held, active=True, drain_sleeping=True)
             return
         else:
             raise RuntimeError('unknown process test command')

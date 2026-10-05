@@ -71,7 +71,8 @@ class AdmissionGate(unittest.TestCase):
                 held = native(9, 103, 5, 2, 8194)
                 mark('ADMISSION_HELD', mode=mode, event=held, point=2, active=True)
                 attempt = native(8, 7)
-                mark('ADMISSION_CONTROLLER_WAITING', mode=mode, event=attempt, active=True)
+                contended = native(12, 7)
+                mark('ADMISSION_CONTROLLER_WAITING', mode=mode, event=contended, active=True)
                 native(10, 103, 5, operation=8194)
                 native(3, 103, 5, operation=8194)
                 native(5, 103, 5, operation=8194)
@@ -95,7 +96,8 @@ class AdmissionGate(unittest.TestCase):
              instance_status='active', elapsed_ms=10010,
              child=dict(state, owned_cpus=[3, 4, 5, 6], online_cpus=[3, 4, 5, 6]))
         closed = native(6)
-        mark('ADMISSION_DRAIN_WAITING', closed=closed, held=held, active=True)
+        mark('ADMISSION_DRAIN_WAITING', closed=closed, held=held, active=True,
+             drain_sleeping=True)
         native(10, 105, 6, operation=8193)
         native(5, 105, 6, operation=8193)
         native(7)
@@ -106,6 +108,29 @@ class AdmissionGate(unittest.TestCase):
 
     def test_complete_literal_is_accepted(self):
         self.assertEqual(self.verify(''.join(self.trace())), [])
+
+    def test_attempt_only_is_not_controller_contention(self):
+        lines = self.trace()
+        attempt = None
+        for i, line in enumerate(lines):
+            if line.startswith('MK_X86_NATIVE '):
+                event = json.loads(line.split(' ', 1)[1])
+                if event['point'] == 8 and event['request'] == 7:
+                    attempt = {key: value for key, value in event.items() if key != 'instance'}
+            if line.startswith('MK_X86_ADMISSION_CONTROLLER_WAITING '):
+                value = json.loads(line.split(' ', 1)[1])
+                value['event'] = attempt
+                lines[i] = 'MK_X86_ADMISSION_CONTROLLER_WAITING ' + json.dumps(value) + '\n'
+        self.assertTrue(self.verify(''.join(lines)))
+
+    def test_closed_admission_is_not_a_drain_sleep(self):
+        lines = self.trace()
+        for i, line in enumerate(lines):
+            if line.startswith('MK_X86_ADMISSION_DRAIN_WAITING '):
+                value = json.loads(line.split(' ', 1)[1])
+                value['drain_sleeping'] = False
+                lines[i] = 'MK_X86_ADMISSION_DRAIN_WAITING ' + json.dumps(value) + '\n'
+        self.assertTrue(self.verify(''.join(lines)))
 
     def test_every_acceptance_checkpoint_and_marker_is_required(self):
         lines = self.trace()

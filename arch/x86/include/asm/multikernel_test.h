@@ -16,6 +16,7 @@ enum mk_native_point {
 	MK_NATIVE_GATE_ENTER,
 	MK_NATIVE_GATE_LEAVE,
 	MK_NATIVE_GATE_TIMEOUT,
+	MK_NATIVE_CONTROLLER_CONTENDED,
 };
 struct dentry;
 struct mk_ipi_data;
@@ -24,6 +25,8 @@ struct mutex;
 struct mk_instance;
 struct kimage;
 void mk_native_gate_init(struct dentry *directory);
+void mk_native_controller_lock(struct mutex *lock, u64 request);
+void mk_native_drain_wait(bool waiting);
 void mk_native_rcu_init(struct dentry *directory);
 void mk_native_rcu_vector(bool entered);
 bool mk_native_in_vector(void);

@@ -146,8 +146,11 @@ void mk_hotplug_quiesce(void)
 	raw_spin_unlock_irqrestore(&mk_cpu_hotplug_lock, flags);
 #ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
 	mk_native_checkpoint(MK_NATIVE_QUIESCE_CLOSED, 0, 0, 0, 0);
-#endif
+	wait_event_cmd(mk_hotplug_wait, mk_hotplug_idle(),
+		       mk_native_drain_wait(true), mk_native_drain_wait(false));
+#else
 	wait_event(mk_hotplug_wait, mk_hotplug_idle());
+#endif
 #ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
 	mk_native_checkpoint(MK_NATIVE_QUIESCE_DRAINED, 0, 0, 0, 0);
 #endif

@@ -72,6 +72,13 @@ debugfs observations, resource request IDs, physical CPUs and ACK results;
 controller transaction IDs are a separate namespace. The hooks never delay
 IRQ handlers. Literal oracle fixtures are not native evidence.
 
+Controller waiting requires a failed native mutex_trylock (point12), not the
+pre-call attempt marker (point8). Drain observation requires the actual shutdown
+task in TASK_UNINTERRUPTIBLE after wait_event_cmd prepared its wait and found
+accepted work outstanding. The closed-admission marker alone is insufficient.
+The drain observer retains one task reference in the disposable VM, not a
+worker/resource reference; no printing or sleeping occurs in that wait hook.
+
 Remote CPU removal while a child-local park allocation still exists is NOT
 covered: the controller-first case retires that allocation before retry;
 the worker-first case removes its CPU before creating the allocation.
