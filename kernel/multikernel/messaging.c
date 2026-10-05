@@ -39,7 +39,7 @@ struct mk_pending_msg {
 };
 
 static LIST_HEAD(mk_pending_msgs);
-static DEFINE_SPINLOCK(mk_pending_msgs_lock);
+static DEFINE_RAW_SPINLOCK(mk_pending_msgs_lock);
 static u64 mk_last_msg_id;
 
 /* Per-type message handler registry */
