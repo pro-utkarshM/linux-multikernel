@@ -94,7 +94,7 @@ class X86ChildGate(unittest.TestCase):
             self.assertEqual(self.verify(''.join(trace), halt=halt), [])
             self.assertTrue(self.verify(''.join(self.trace()), halt=halt))
 
-    def retention_trace(self):
+    def retention_trace(self, halt='force-retain'):
         trace = self.trace()
         allocations = {'image': 'ffff888000001000', 'ring': 'ffff888040001000',
                        'ring_phys': '40001000', 'control': '40002000',
@@ -103,17 +103,28 @@ class X86ChildGate(unittest.TestCase):
         retained = {'fault_cpu': 3, 'status': 'active', 'owned_cpus': [2, 3],
                     'unload_errno': 16, 'destroy_status': 'failed', 'destroy_transaction': 3,
                     'allocations_before': allocations, 'allocations_after': allocations}
-        trace[4] = ('Sent NMI to 2 CPUs in instance 1\n'
+        mode = halt.removesuffix('-retain')
+        request = ('Sent NMI to 2 CPUs in instance 1\n' if mode == 'force' else
+                   'MK_X86_RETENTION_HALT_REQUEST ' + json.dumps({'mode': mode}) + '\n')
+        if mode in ('poweroff', 'reboot'):
+            request += 'MK_X86_TERMINATION_REQUEST ' + json.dumps({'mode': mode}) + '\n'
+        trace[4] = (request +
                     'MK_X86_TEST_CONFIRM_FAIL phys=3\n'
                     "Overlay tx3: Failed to remove instance 'native-child': -16\n"
                     'MK_X86_RETAINED ' + json.dumps(retained) + '\n'
                     'MK_X86_CONFIRM_FAULT_CLEAR {"cpu":3}\n'
                     'Sent NMI to 2 CPUs in instance 1\n' + trace[4])
-        trace[5] = trace[5].replace('"status":', '"mode": "force-retain", "status":')
+        trace[5] = trace[5].replace('"status":', f'"mode": "{halt}", "status":')
         return ''.join(trace)
 
     def test_failed_confirmation_retains_every_allocation_and_refuses_reclaim(self):
         self.assertEqual(self.verify(self.retention_trace(), halt='force-retain'), [])
+
+    def test_requested_and_voluntary_confirmation_failures_cannot_be_qualified_by_force(self):
+        for halt in ('requested-retain', 'poweroff-retain', 'reboot-retain'):
+            with self.subTest(halt=halt):
+                self.assertEqual(self.verify(self.retention_trace(halt), halt=halt), [])
+                self.assertTrue(self.verify(self.retention_trace(), halt=halt))
 
     def test_retention_cannot_accept_missing_injection_or_changed_allocations(self):
         for old, new in (('MK_X86_TEST_CONFIRM_FAIL phys=3', 'other failure'),

@@ -19,6 +19,8 @@ import time
 
 BASE = Path('/sys/fs/multikernel')
 NAME = 'native-child'
+HALT_MODES = ('requested', 'force', 'poweroff', 'reboot')
+HALT_LANES = HALT_MODES + tuple(mode + '-retain' for mode in HALT_MODES)
 
 
 def marker(name, **fields):
@@ -54,7 +56,7 @@ def status(expected):
     return actual
 
 
-def failed_force_retention(child):
+def failed_retention(child, console, mode):
     from kerf.kill.main import halt_multikernel
     from kerf.unload.main import kexec_file_unload, KEXEC_FILE_UNLOAD
     from kerf.load.main import KEXEC_MULTIKERNEL, KEXEC_MK_ID
@@ -65,6 +67,7 @@ def failed_force_retention(child):
     before = json.loads((fault / 'snapshot').read_text())
     owned = ownership()
     assert before['state'] == 3 and owned == child
+    failures_before = int((fault / 'failures').read_text())
     (fault / 'fail_cpu').write_text(str(child[-1]) + '\n')
 
     def rejected(operation):
@@ -75,7 +78,20 @@ def failed_force_retention(child):
             return error.errno
         raise RuntimeError('unsafe operation succeeded after failed confirmation')
 
-    rejected(lambda: halt_multikernel(1, force=True))
+    marker('RETENTION_HALT_REQUEST', mode=mode)
+    if mode in ('requested', 'force'):
+        rejected(lambda: halt_multikernel(1, force=(mode == 'force')))
+    else:
+        marker('TERMINATION_REQUEST', mode=mode)
+        command = f'terminate {mode}\n'.encode()
+        assert os.write(console, command) == len(command)
+        deadline = time.monotonic() + 30
+        # Wait for the actual incoming voluntary-halt worker's failed probe;
+        # an unchanged ACTIVE status alone would pass before it ran at all.
+        while int((fault / 'failures').read_text()) <= failures_before:
+            if time.monotonic() >= deadline:
+                raise RuntimeError('voluntary failed-confirmation worker never ran')
+            time.sleep(0.05)
     status('active')
     unload_errno = rejected(lambda: kexec_file_unload(
         KEXEC_MULTIKERNEL | KEXEC_MK_ID(1) | KEXEC_FILE_UNLOAD))
@@ -116,7 +132,7 @@ def workload():
     options = dict(arg.split('=', 1) for arg in Path('/proc/cmdline').read_text().split()
                    if '=' in arg)
     halt = options.get('mk_x86_halt', 'requested')
-    if halt not in ('requested', 'force', 'force-retain', 'poweroff', 'reboot'):
+    if halt not in HALT_LANES:
         raise ValueError('unsupported x86 halt lane')
     assert Path('/sys/devices/system/cpu/online').read_text().strip() == '0-5'
     ids = logical_to_apic()
@@ -170,8 +186,8 @@ def workload():
                     reply = True
         if not reply:
             raise RuntimeError('real child handshake timed out')
-        if halt == 'force-retain':
-            failed_force_retention(child)
+        if halt.endswith('-retain'):
+            failed_retention(child, fd, halt.removesuffix('-retain'))
         elif halt == 'force':
             cli('kill', NAME, '--force')
         elif halt == 'requested':

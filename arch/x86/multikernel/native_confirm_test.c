@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-only
 /* Test-only VM instrumentation. Never include in the production series. */
 #include <linux/debugfs.h>
+#include <linux/atomic.h>
 #include <linux/init.h>
 #include <linux/limits.h>
 #include <linux/module.h>
@@ -11,6 +12,7 @@
 
 static bool enabled;
 static u64 fail_cpu = U64_MAX;
+static atomic64_t failure_count = ATOMIC64_INIT(0);
 
 static int __init mk_native_confirm_setup(char *value)
 {
@@ -27,8 +29,16 @@ bool mk_x86_native_confirm_failure(u64 phys_cpu)
 	    phys_cpu != READ_ONCE(fail_cpu))
 		return false;
 	pr_info("MK_X86_TEST_CONFIRM_FAIL phys=%llu\n", phys_cpu);
+	atomic64_inc(&failure_count);
 	return true;
 }
+
+static int failures_get(void *unused, u64 *value)
+{
+	*value = atomic64_read(&failure_count);
+	return 0;
+}
+DEFINE_DEBUGFS_ATTRIBUTE(failures_fops, failures_get, NULL, "%llu\n");
 
 static int snapshot_show(struct seq_file *seq, void *unused)
 {
@@ -62,6 +72,7 @@ static int __init native_confirm_init(void)
 	if (IS_ERR(directory))
 		return PTR_ERR(directory);
 	debugfs_create_u64("fail_cpu", 0600, directory, &fail_cpu);
+	debugfs_create_file("failures", 0400, directory, NULL, &failures_fops);
 	debugfs_create_file("snapshot", 0400, directory, NULL, &snapshot_fops);
 	return 0;
 }

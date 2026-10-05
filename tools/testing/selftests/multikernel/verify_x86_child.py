@@ -7,8 +7,15 @@ from pathlib import Path
 import re
 import uuid
 
+HALT_MODES = ('requested', 'force', 'poweroff', 'reboot')
+HALT_LANES = HALT_MODES + tuple(mode + '-retain' for mode in HALT_MODES)
+
 
 def verify(trace, halt='requested'):
+    if halt not in HALT_LANES:
+        return ['unsupported halt lane']
+    mode = halt.removesuffix('-retain')
+    retaining = halt.endswith('-retain')
     errors = []
     names = ('BEGIN', 'CHILD_ALIVE', 'PING', 'CHILD_REPLY', 'HALTED',
              'UNLOADED', 'HOST_SURVIVED', 'PASS')
@@ -62,15 +69,13 @@ def verify(trace, halt='requested'):
     confirm = trace.find('Instance 1 (native-child) halted, all CPUs confirmed parked')
     if confirm < positions[3] or confirm >= positions[4]:
         errors.append('no native all-CPU parked confirmation before settlement')
-    if halt not in ('requested', 'force', 'force-retain', 'poweroff', 'reboot'):
-        errors.append('unsupported halt lane')
     if events['HALTED'].get('mode', 'requested') != halt:
         errors.append('halt lane mismatch')
-    if halt in ('force', 'force-retain'):
+    if mode == 'force' or retaining:
         nmi = trace.find('Sent NMI to 2 CPUs in instance 1')
         if nmi < positions[3] or nmi >= confirm:
             errors.append('no force-stop NMI to both assigned CPUs before settlement')
-    if halt == 'force-retain':
+    if retaining:
         retained = list(re.finditer(r'^MK_X86_RETAINED (.*)$', trace, re.M))
         cleared = list(re.finditer(r'^MK_X86_CONFIRM_FAULT_CLEAR (.*)$', trace, re.M))
         try:
@@ -96,12 +101,20 @@ def verify(trace, halt='requested'):
             if (not positions[3] < injection < retained[0].start() < cleared[0].start() < confirm
                     or json.loads(cleared[0][1]).get('cpu') != cpu):
                 errors.append('missing actual fault injection followed by bounded recovery')
+            if mode == 'force' and nmi >= injection:
+                errors.append('initial retention halt was not forced')
+            if mode != 'force':
+                requests = list(re.finditer(r'^MK_X86_RETENTION_HALT_REQUEST (.*)$', trace, re.M))
+                if (len(requests) != 1 or json.loads(requests[0][1]).get('mode') != mode
+                        or not positions[3] < requests[0].start() < injection
+                        or nmi < cleared[0].start()):
+                    errors.append('wrong initial halt path in the retention lane')
         except (KeyError, ValueError, TypeError, AttributeError):
             errors.append('invalid retention evidence')
-    if halt in ('poweroff', 'reboot'):
+    if mode in ('poweroff', 'reboot'):
         requests = list(re.finditer(r'^MK_X86_TERMINATION_REQUEST (.*)$', trace, re.M))
         try:
-            if (len(requests) != 1 or json.loads(requests[0][1]).get('mode') != halt
+            if (len(requests) != 1 or json.loads(requests[0][1]).get('mode') != mode
                     or not positions[3] < requests[0].start() < confirm):
                 errors.append('missing matching child termination request')
         except (ValueError, TypeError, AttributeError):
@@ -120,7 +133,7 @@ def verify(trace, halt='requested'):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('trace', type=Path)
-    parser.add_argument('--halt', choices=('requested', 'force', 'force-retain', 'poweroff', 'reboot'),
+    parser.add_argument('--halt', choices=HALT_LANES,
                         default='requested')
     args = parser.parse_args()
     errors = verify(args.trace.read_text(errors='replace'), halt=args.halt)

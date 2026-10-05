@@ -65,16 +65,19 @@ failed-confirmation retention or callback/concurrency safety.
 
 Stop-confirmation failure lane (test branch only): build a separate kernel with
 CONFIG_MK_X86_NATIVE_CONFIRM_TEST=y; never add it to production. Append HOST
-mk_x86_halt=force-retain mk_native_confirm_test=1 and verify with
---halt=force-retain. The option defaults off; without the explicit host boot
+mk_x86_halt=MODE-retain mk_native_confirm_test=1, where MODE is requested,
+force, poweroff or reboot, and verify with --halt=MODE-retain. The option
+defaults off; without the explicit host boot
 parameter no debugfs interface is created and no confirmation is injected.
 The default-off build must have no mk_x86_native_confirm_failure symbol.
 
 After a real child handshake, the selector rejects confirmation for the last
-assigned physical CPU. Force-halt must fail and leave ACTIVE, CPU ownership,
+assigned physical CPU. Settlement must fail and leave ACTIVE, CPU ownership,
 Image, ring, control/context and pool allocations unchanged. File unload must
 return EBUSY. The destruction overlay is accepted as a transaction but must
 have status failed, a specific kernel EBUSY refusal and a retained instance.
-After clearing the selector, a second force-halt must confirm all CPUs and
+Voluntary lanes wait for the real incoming worker's failed probe counter, not
+just an unchanged ACTIVE status that could be observed before the worker runs.
+After clearing the selector, a recovery force-halt must confirm all CPUs and
 permit unload. This models inability to prove stop, NOT a real CPU proven to
 be executing the Image, and does not qualify IRQ/RCU or bulk cleanup races.
