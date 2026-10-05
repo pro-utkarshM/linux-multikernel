@@ -138,7 +138,7 @@ the nested prerequisite, the child sends one nonce-tagged OUTPUT. H0 holds
 its actual RX callback with the connection-list lock held; H1 closes the
 only host console file reference. Only a real failed lock acquisition counts
 as contention. H2 releases the bounded two-second IRQ gate. Require RX's last
-connection access/wakeup before close acquires the lock, unlinks the selected
+connection access/enqueue before close acquires the lock, unlinks the selected
 connection, and frees its RX buffer and connection. Observation retains only
 pointer identities and never dereferences freed memory.
 
@@ -155,6 +155,19 @@ The first two writes contain no newline to avoid terminal output conversion.
 Any deadline, extra event or premature free invalidates the run. Literal
 verifier fixtures cannot qualify native execution. Ring-writer retirement,
 lockdep/RT and physical-hardware evidence remain separate gates.
+
+For the separate deferred-worker-versus-close case, use the same tty bundle
+with mk_tty_mode=worker and pass --mode=worker to verify_x86_tty.py. A worker
+waits after the selected receive copy and outside all raw locks. The closer
+unlinks, then blocks in the real flush_work barrier completion. Test-only
+workqueue/completion hooks match that exact work, completion and closer task;
+the wait event is emitted only after the completion wait prepared task state.
+H2 observes TASK_UNINTERRUPTIBLE after that phase, then releases the worker.
+Require last worker access before flush return, buffer free and connection
+free. The one-shot observer retains only a task reference, not an object pin.
+Worker gates have ten-second safety timeouts; host observation remains bounded
+to one second so the child's second write must still arrive after close.
+Missing wait proof, wrong mode, IRQ-context wakeup, early free or timeout fails.
 
 Ring producer versus loaded-Image unload
 --------------------------------------

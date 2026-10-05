@@ -17,6 +17,9 @@
 #include <linux/sched/debug.h>
 #include <linux/completion.h>
 #include "sched.h"
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+#include <asm/multikernel_test.h>
+#endif
 
 static void complete_with_flags(struct completion *x, int wake_flags)
 {
@@ -96,6 +99,9 @@ do_wait_for_common(struct completion *x,
 			}
 			__prepare_to_swait(&x->wait, &wait);
 			__set_current_state(state);
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+			mk_native_tty_completion_wait(x);
+#endif
 			raw_spin_unlock_irq(&x->wait.lock);
 			timeout = action(timeout);
 			raw_spin_lock_irq(&x->wait.lock);

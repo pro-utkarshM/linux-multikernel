@@ -29,8 +29,14 @@ def wait(predicate, seconds):
 
 def tty(fd, pending, nonce, child, spare):
     console = Console(fd, pending, nonce)
+    modes = [word.split('=', 1)[1] for word in Path('/proc/cmdline').read_text().split()
+             if word.startswith('mk_tty_mode=')]
+    if len(modes) > 1 or modes and modes[0] not in ('ipi', 'worker'):
+        raise RuntimeError('invalid native MKTTY mode')
+    mode = modes[0] if modes else 'ipi'
     os.sched_setaffinity(0, {2})
-    marker('TTY_BEGIN', nonce=nonce, taint=int(Path('/proc/sys/kernel/tainted').read_text()))
+    marker('TTY_BEGIN', nonce=nonce, mode=mode,
+           taint=int(Path('/proc/sys/kernel/tainted').read_text()))
     start = threading.Event()
     def close():
         os.sched_setaffinity(0, {1})
@@ -38,15 +44,20 @@ def tty(fd, pending, nonce, child, spare):
             raise RuntimeError('MKTTY close was never admitted')
         os.close(fd)  # last real file reference; no duplicate/read syscall
     closer = Operation(close)
-    (GATE / 'tty_arm').write_text(nonce)
+    (GATE / ('tty_worker_arm' if mode == 'worker' else 'tty_arm')).write_text(nonce)
     console.send('burst')
-    wait(lambda s: len(s['events']) == 1, 1)
+    wait(lambda s: len(s['events']) == (3 if mode == 'worker' else 1), 1)
     start.set()
-    held = wait(lambda s: len(s['events']) == 2 and s['events'][-1]['point'] == 2, 1)
+    if mode == 'worker':
+        held = wait(lambda s: len(s['events']) == 6 and s['events'][-1]['point'] == 12
+                    and s['flush_waiting'], 1)
+    else:
+        held = wait(lambda s: len(s['events']) == 2 and s['events'][-1]['point'] == 2, 1)
     (GATE / 'tty_release').write_bytes(b'1')
     marker('TTY_HELD', nonce=nonce, state=held)
     closer.finish(3)
-    final = wait(lambda s: s['closed'] and s['unmatched'] == 1 and len(s['events']) == 9, 5)
+    final = wait(lambda s: s['closed'] and s['unmatched'] == 1
+                 and len(s['events']) == (12 if mode == 'worker' else 9), 5)
     marker('TTY_COMPLETE', nonce=nonce, state=final,
            taint=int(Path('/proc/sys/kernel/tainted').read_text()))
     # Reconnect only AFTER proving delivery without the freed connection.

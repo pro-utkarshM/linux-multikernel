@@ -26,13 +26,22 @@ def verify_records(held, final):
                     or state['unmatched'] != int(closed)):
                 raise ValueError('unproven hold, reclamation, unmatched RX or clean deadline')
         events = final['events']
-        if len(events) != 9 or held['events'] != events[:2]:
+        mode = held.get('mode', 'ipi')
+        if mode not in ('ipi', 'worker') or final.get('mode', 'ipi') != mode:
+            raise ValueError('unknown or mismatched MKTTY mode')
+        worker = mode == 'worker'
+        points = (1, 4, 10, 6, 11, 12, 3, 13, 14, 7, 8, 9) if worker else tuple(range(1, 10))
+        if (worker and (held.get('flush_waiting') is not True or final.get('flush_waiting') is not False)):
+            raise ValueError('actual flush completion wait not observed')
+        if len(events) != len(points) or held['events'] != events[:6 if worker else 2]:
             raise ValueError('missing or inconsistent MKTTY events')
         for index, event in enumerate(events, 1):
-            irq = index in (1, 4, 9)
+            point = points[index - 1]
+            irq = point in (1, 4, 9)
+            cpus = (0, 1, 2) if worker and point in (10, 13) else (0,) if irq else (2,) if point == 3 else (1,)
             if (any(type(event.get(k)) is not int for k in ('seq', 'point', 'cpu'))
-                    or event['seq'] != index or event['point'] != index
-                    or event['cpu'] != (0 if irq else 2 if index == 3 else 1)
+                    or event['seq'] != index or event['point'] != point
+                    or event['cpu'] not in cpus
                     or event.get('hardirq') is not irq or event.get('vector') is not irq):
                 raise ValueError('early free, wrong CPU role or non-native RX observation')
     except (KeyError, ValueError, TypeError) as error:
@@ -40,7 +49,7 @@ def verify_records(held, final):
     return []
 
 
-def verify(trace, revision):
+def verify(trace, revision, mode='ipi'):
     errors = verify_nested(trace, revision, qualification='native-tty')
     try:
         def one(name):
@@ -53,6 +62,9 @@ def verify(trace, revision):
         final_at, final = one('TTY_COMPLETE')
         health_at, health = one('TTY_CHILD_HEALTH')
         log_at, log = one('TTY_KMSG_COMPLETE')
+        if (mode not in ('ipi', 'worker') or begin.get('mode', 'ipi') != mode
+                or held['state'].get('mode', 'ipi') != mode):
+            raise ValueError('requested MKTTY mode not exercised')
         nonce = one('PING')[1]['nonce']
         child = one('CHILD_ALIVE')[1]
         confirmed = trace.find('Instance 1 (native-child) halted, all CPUs confirmed parked')
@@ -95,9 +107,10 @@ def main():
     parser.add_argument('trace', type=Path)
     parser.add_argument('--revision', required=True)
     parser.add_argument('--bundle', type=Path, required=True)
+    parser.add_argument('--mode', choices=('ipi', 'worker'), default='ipi')
     args = parser.parse_args()
     errors = validate_nested_bundle(args.bundle, args.revision, profile='tty')
-    errors += verify(args.trace.read_text(errors='replace'), args.revision)
+    errors += verify(args.trace.read_text(errors='replace'), args.revision, args.mode)
     for error in errors:
         print('FAIL:', error)
     if not errors:

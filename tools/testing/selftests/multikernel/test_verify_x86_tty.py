@@ -31,6 +31,36 @@ class TtyOracle(unittest.TestCase):
     def test_good_literal_lifetime(self):
         self.assertEqual(self.verify(*self.records()), [])
 
+    def worker_records(self):
+        held, final = self.records()
+        points = (1, 4, 10, 6, 11, 12, 3, 13, 14, 7, 8, 9)
+        events = []
+        for seq, point in enumerate(points, 1):
+            irq = point in (1, 4, 9)
+            cpu = 0 if irq or point in (10, 13) else 2 if point == 3 else 1
+            events.append(dict(seq=seq, point=point, cpu=cpu, hardirq=irq, vector=irq))
+        held.update(mode='worker', flush_waiting=True, events=events[:6])
+        final.update(mode='worker', flush_waiting=False, events=events)
+        return held, final
+
+    def test_worker_drain_literal(self):
+        self.assertEqual(self.verify(*self.worker_records()), [])
+
+    def test_worker_drain_rejects_start_marker_and_early_free(self):
+        held, final = self.worker_records()
+        held['flush_waiting'] = False
+        self.assertTrue(self.verify(held, final))
+        for point in (10, 11, 12, 13, 14):
+            held, final = self.worker_records()
+            final['events'] = [e for e in final['events'] if e['point'] != point]
+            self.assertTrue(self.verify(held, final))
+        held, final = self.worker_records()
+        final['events'][7]['hardirq'] = True
+        self.assertTrue(self.verify(held, final))
+        held, final = self.worker_records()
+        final['events'][8]['point'], final['events'][9]['point'] = 7, 14
+        self.assertTrue(self.verify(held, final))
+
     def test_missing_or_early_free_and_wrong_cpu_rejected(self):
         for index in range(9):
             held, final = self.records()

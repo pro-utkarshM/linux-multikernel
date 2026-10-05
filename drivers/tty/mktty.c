@@ -85,9 +85,16 @@ static struct mktty_host_conn *mktty_find_conn(int instance_id)
 static void mktty_host_wake_work(struct work_struct *work)
 {
 	struct mktty_host_conn *conn = container_of(work, struct mktty_host_conn,
-						  wake_work);
+							  wake_work);
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	bool observed = mk_native_tty_worker(conn);
+#endif
 
 	wake_up_interruptible(&conn->wait);
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	if (observed)
+		mk_native_tty_boundary((unsigned long)conn, 13);
+#endif
 }
 
 static int mktty_host_open(struct inode *inode, struct file *filp)
@@ -137,7 +144,13 @@ static int mktty_host_release(struct inode *inode, struct file *filp)
 	raw_spin_unlock_irqrestore(&mktty_host_conns_lock, flags);
 
 	/* Unlink excludes new enqueues; do not wait while holding either raw lock. */
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	mk_native_tty_flush_begin(conn, &conn->wake_work);
+#endif
 	flush_work(&conn->wake_work);
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	mk_native_tty_boundary(identity, 14);
+#endif
 	kfree(conn->rx_buf);
 #ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
 	mk_native_tty_boundary(identity, 7);
