@@ -16,6 +16,37 @@ sys.path.insert(0, '/usr/lib/python3/dist-packages')
 from x86_host_init import BASE, NAME, cli, marker, mount, ownership, require_qemu, status
 
 
+def capture_tail(fd, pending):
+    """Bounded console capture before and after confirmed stop, before unload.
+
+    This is evidence capture, not an IRQ/callback retirement assertion. The
+    child can still print after its retirement marker; stop confirmation must
+    precede the final drain so those diagnostics cannot be hidden by PASS.
+    """
+    deadline = time.monotonic() + 1
+    captured = 0
+    while time.monotonic() < deadline:
+        if not select.select([fd], [], [], 0.1)[0]:
+            continue
+        try:
+            chunk = os.read(fd, 8192)
+        except BlockingIOError:
+            continue
+        if not chunk:
+            break
+        captured += len(chunk)
+        pending.extend(chunk)
+        while b'\n' in pending:
+            line, _, pending = pending.partition(b'\n')
+            text = line.decode(errors='replace').rstrip('\r')
+            print(text, flush=True)
+            if text.startswith('MK_X86_FAIL '):
+                raise RuntimeError('nested child reported failure; reclamation prohibited')
+        if captured > 1024 * 1024:
+            raise RuntimeError('child diagnostic flood; qualification aborted')
+    return pending
+
+
 def workload():
     from kerf.topology import logical_to_apic
     if Path('/sys/devices/system/cpu/online').read_text().strip() != '0-7':
@@ -83,7 +114,12 @@ def workload():
                     retired = True
         if not retired:
             raise RuntimeError('nested roundtrip timed out; reclamation prohibited')
+        pending = capture_tail(fd, pending)
         cli('kill', NAME)
+        pending = capture_tail(fd, pending)
+        if pending:
+            print(pending.decode(errors='replace'), flush=True)
+            raise RuntimeError('incomplete child diagnostic at confirmed halt; qualification aborted')
         marker('NESTED_HALTED', status=status('loaded'), assigned_cpus=ownership())
         cli('unload', NAME)
         marker('NESTED_UNLOADED', status=status('ready'), assigned_cpus=ownership())

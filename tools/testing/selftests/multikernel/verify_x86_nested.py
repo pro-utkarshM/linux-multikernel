@@ -21,7 +21,10 @@ def verify(trace, expected_revision=None):
              'NESTED_POOL_READY', 'NESTED_CPU_RETURNED', 'NESTED_POOL_RETIRED',
              'NESTED_HALTED', 'NESTED_UNLOADED', 'NESTED_HOST_SURVIVED', 'NESTED_PASS')
     errors, events, positions = [], {}, {}
-    if re.search(r'MK_X86_FAIL|Kernel panic - not syncing:|WARNING:|BUG:|Sent NMI to', trace):
+    if re.search(r'MK_X86_FAIL|Kernel panic - not syncing:|WARNING:|BUG:|Sent NMI to'
+                 r'|general protection fault|Oops:|detected (?:expedited )?stalls'
+                 r'|watchdog:.*lockup|rcu:.*(?:self-detected stall|kthread starved)',
+                 trace, re.I):
         errors.append('fault, warning or forced recovery in prerequisite trace')
     for name in names:
         matches = list(re.finditer(r'^MK_X86_' + name + r' (.*)$', trace, re.M))
@@ -124,13 +127,27 @@ def verify(trace, expected_revision=None):
     return errors
 
 
+def validate_nested_bundle(bundle, revision):
+    errors = validate_bundle(bundle, revision)
+    try:
+        provenance = json.loads((bundle / 'provenance.json').read_text())
+        config = set((bundle / 'kernel.config').read_text().splitlines())
+        required = {'CONFIG_MULTIKERNEL=y', 'CONFIG_DEBUG_FS=y',
+                    'CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST=y'}
+        if provenance.get('profile') != 'nested' or not required <= config:
+            errors.append('nested profile/observation configuration missing')
+    except (OSError, ValueError, TypeError, AttributeError):
+        errors.append('invalid nested profile/configuration')
+    return errors
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('trace', type=Path)
     parser.add_argument('--revision', required=True)
     parser.add_argument('--bundle', type=Path, required=True)
     args = parser.parse_args()
-    errors = validate_bundle(args.bundle, args.revision)
+    errors = validate_nested_bundle(args.bundle, args.revision)
     errors += verify(args.trace.read_text(errors='replace'), expected_revision=args.revision)
     for error in errors:
         print('FAIL:', error)
