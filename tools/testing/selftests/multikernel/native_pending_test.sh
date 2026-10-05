@@ -6,7 +6,7 @@ src=$(CDPATH= cd -- "$test_dir/../../../.." && pwd)
 build=$(mktemp -d "${TMPDIR:-/tmp}/mk-native-pending.XXXXXX")
 trap 'rm -rf -- "$build"' EXIT HUP INT TERM
 awk '/^struct mk_pending_msg \{/ {copy=1}
-     /^static (LIST_HEAD|DEFINE_SPINLOCK)\(mk_pending_msgs/ {print}
+     /^static (LIST_HEAD|DEFINE_RAW_SPINLOCK)\(mk_pending_msgs/ {print}
      /^static u64 mk_last_msg_id;/ {print}
      /^(struct mk_pending_msg \*|void |int |u64 )mk_msg_pending_/ {copy=1}
      copy {print}

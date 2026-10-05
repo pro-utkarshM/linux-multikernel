@@ -12,9 +12,9 @@
 #define GFP_KERNEL 0
 #define kzalloc(n, flags) calloc(1, n)
 #define kfree free
-#define DEFINE_SPINLOCK(name) bool name
-#define spin_lock_irqsave(lock, flags) do { assert(!*(lock)); *(lock) = true; (flags) = 0; } while (0)
-#define spin_unlock_irqrestore(lock, flags) do { assert(*(lock)); *(lock) = false; (void)(flags); } while (0)
+#define DEFINE_RAW_SPINLOCK(name) bool name
+#define raw_spin_lock_irqsave(lock, flags) do { assert(!*(lock)); *(lock) = true; (flags) = 0; } while (0)
+#define raw_spin_unlock_irqrestore(lock, flags) do { assert(*(lock)); *(lock) = false; (void)(flags); } while (0)
 #define msecs_to_jiffies(ms) (ms)
 #define pr_err(...) do { } while (0)
 #define MK_MSG_SYSTEM 5
