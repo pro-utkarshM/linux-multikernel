@@ -55,6 +55,11 @@ def status(expected):
 
 def workload():
     from kerf.topology import logical_to_apic
+    options = dict(arg.split('=', 1) for arg in Path('/proc/cmdline').read_text().split()
+                   if '=' in arg)
+    halt = options.get('mk_x86_halt', 'requested')
+    if halt not in ('requested', 'force', 'poweroff', 'reboot'):
+        raise ValueError('unsupported x86 halt lane')
     assert Path('/sys/devices/system/cpu/online').read_text().strip() == '0-5'
     ids = logical_to_apic()
     host, child, spare = ([ids[i] for i in group]
@@ -107,8 +112,21 @@ def workload():
                     reply = True
         if not reply:
             raise RuntimeError('real child handshake timed out')
-        cli('kill', NAME)
-        marker('HALTED', status=status('loaded'), assigned_cpus=ownership())
+        if halt == 'force':
+            cli('kill', NAME, '--force')
+        elif halt == 'requested':
+            cli('kill', NAME)
+        else:
+            marker('TERMINATION_REQUEST', mode=halt)
+            command = f'terminate {halt}\n'.encode()
+            assert os.write(fd, command) == len(command)
+            deadline = time.monotonic() + 30
+            while (BASE / 'instances' / NAME / 'status').read_text().strip() != 'loaded':
+                if time.monotonic() >= deadline:
+                    raise RuntimeError('voluntary halt did not settle')
+                if select.select([fd], [], [], 0.1)[0]:
+                    print(os.read(fd, 8192).decode(errors='replace'), end='', flush=True)
+        marker('HALTED', mode=halt, status=status('loaded'), assigned_cpus=ownership())
         cli('unload', NAME)
         marker('UNLOADED', status=status('ready'), assigned_cpus=ownership())
         marker('HOST_SURVIVED',

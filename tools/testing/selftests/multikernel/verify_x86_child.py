@@ -8,7 +8,7 @@ import re
 import uuid
 
 
-def verify(trace):
+def verify(trace, halt='requested'):
     errors = []
     names = ('BEGIN', 'CHILD_ALIVE', 'PING', 'CHILD_REPLY', 'HALTED',
              'UNLOADED', 'HOST_SURVIVED', 'PASS')
@@ -62,6 +62,22 @@ def verify(trace):
     confirm = trace.find('Instance 1 (native-child) halted, all CPUs confirmed parked')
     if confirm < positions[3] or confirm >= positions[4]:
         errors.append('no native all-CPU parked confirmation before settlement')
+    if halt not in ('requested', 'force', 'poweroff', 'reboot'):
+        errors.append('unsupported halt lane')
+    if events['HALTED'].get('mode', 'requested') != halt:
+        errors.append('halt lane mismatch')
+    if halt == 'force':
+        nmi = trace.find('Sent NMI to 2 CPUs in instance 1')
+        if nmi < positions[3] or nmi >= confirm:
+            errors.append('no force-stop NMI to both assigned CPUs before settlement')
+    if halt in ('poweroff', 'reboot'):
+        requests = list(re.finditer(r'^MK_X86_TERMINATION_REQUEST (.*)$', trace, re.M))
+        try:
+            if (len(requests) != 1 or json.loads(requests[0][1]).get('mode') != halt
+                    or not positions[3] < requests[0].start() < confirm):
+                errors.append('missing matching child termination request')
+        except (ValueError, TypeError, AttributeError):
+            errors.append('invalid child termination request')
     for name, status in (('HALTED', 'loaded'), ('UNLOADED', 'ready')):
         if (events[name].get('status') != status
                 or events[name].get('assigned_cpus') != begin.get('child_cpus')):
@@ -76,12 +92,14 @@ def verify(trace):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('trace', type=Path)
+    parser.add_argument('--halt', choices=('requested', 'force', 'poweroff', 'reboot'),
+                        default='requested')
     args = parser.parse_args()
-    errors = verify(args.trace.read_text(errors='replace'))
+    errors = verify(args.trace.read_text(errors='replace'), halt=args.halt)
     for error in errors:
         print('FAIL:', error)
     if not errors:
-        print('PASS: executing-child boot only; worker/lifetime races not qualified')
+        print(f'PASS: executing-child {args.halt} halt; worker/lifetime races not qualified')
     return bool(errors)
 
 

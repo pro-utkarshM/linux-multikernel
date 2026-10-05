@@ -48,6 +48,11 @@ def main():
         fields = line.strip().split()
         if len(fields) == 2 and fields[0] == 'ping':
             marker('CHILD_REPLY', nonce=fields[1])
+        elif len(fields) == 2 and fields[0] == 'terminate' and fields[1] in ('poweroff', 'reboot'):
+            os.sync()
+            command = 0x4321FEDC if fields[1] == 'poweroff' else 0x01234567
+            ctypes.CDLL(None).reboot(command)
+            marker('FAIL', error='child termination returned')
         else:
             marker('FAIL', error='unexpected child command')
 

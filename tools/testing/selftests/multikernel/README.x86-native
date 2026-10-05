@@ -50,3 +50,12 @@ must leave the host alive and instance READY with retained CPU ownership.
 A PASS is ONLY executing-child boot, requested halt and unload under QEMU TCG.
 It is NOT incoming-worker/controller interleaving, IRQ/RCU callback retirement,
 failed confirmation, force halt, DMA, crash-kexec or physical-hardware proof.
+
+Additional bounded termination lanes use the same bundle. Add one of
+mk_x86_halt=force, mk_x86_halt=poweroff or mk_x86_halt=reboot to the HOST QEMU
+command line, and pass the matching --halt option to verify_x86_child.py. The
+force lane also requires the native report that NMIs went to both assigned
+CPUs before confirmation. Voluntary lanes send a mktty userspace command to
+the child and wait for confirmed settlement; they do not call host poweroff or
+reboot until all assertions have run. A pass in these lanes does not prove
+failed-confirmation retention or callback/concurrency safety.

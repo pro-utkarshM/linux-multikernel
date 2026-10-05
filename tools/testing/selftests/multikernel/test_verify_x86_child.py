@@ -3,18 +3,23 @@
 """The native boot gate must not accept pre-spawn or incomplete evidence."""
 import importlib.util
 import json
+import inspect
 from pathlib import Path
 import unittest
 
 
 class X86ChildGate(unittest.TestCase):
-    def verify(self, trace):
+    def verify(self, trace, halt=None):
         spec = importlib.util.spec_from_file_location(
             'verify_x86_child', Path(__file__).with_name('verify_x86_child.py'))
         self.assertTrue(spec.origin and Path(spec.origin).is_file(),
                         'native executing-child verifier has not been implemented')
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
+        if halt is not None:
+            self.assertIn('halt', inspect.signature(module.verify).parameters,
+                          'verifier cannot distinguish forced/voluntary halt evidence')
+            return module.verify(trace, halt=halt)
         return module.verify(trace)
 
     def trace(self):
@@ -68,6 +73,26 @@ class X86ChildGate(unittest.TestCase):
         for failure in ('MK_X86_FAIL {"error":"timeout"}\n',
                         'Kernel panic - not syncing: init failed\n'):
             self.assertTrue(self.verify(''.join(self.trace()) + failure))
+
+    def test_requested_halt_cannot_qualify_force_halt(self):
+        self.assertTrue(self.verify(''.join(self.trace()), halt='force'))
+
+    def test_force_halt_requires_nmi_to_both_cpus_before_confirmation(self):
+        trace = self.trace()
+        trace[4] = 'Sent NMI to 2 CPUs in instance 1\n' + trace[4]
+        trace[5] = trace[5].replace('"status":', '"mode": "force", "status":')
+        self.assertEqual(self.verify(''.join(trace), halt='force'), [])
+        self.assertTrue(self.verify(''.join(trace).replace('NMI to 2', 'NMI to 1'),
+                                    halt='force'))
+
+    def test_voluntary_halt_requires_the_matching_child_request(self):
+        for halt in ('poweroff', 'reboot'):
+            trace = self.trace()
+            trace[4] = ('MK_X86_TERMINATION_REQUEST ' + json.dumps({'mode': halt})
+                        + '\n' + trace[4])
+            trace[5] = trace[5].replace('"status":', f'"mode": "{halt}", "status":')
+            self.assertEqual(self.verify(''.join(trace), halt=halt), [])
+            self.assertTrue(self.verify(''.join(self.trace()), halt=halt))
 
 
 if __name__ == '__main__':
