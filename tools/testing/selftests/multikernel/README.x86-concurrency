@@ -151,6 +151,11 @@ base64 chunks preserve bytes; require contiguous sequences, ordered chunks,
 byte/record counts and SHA256. Ring overrun, missing end marker, truncation or
 encoded warning/BUG/Oops/RCU stall fails qualification. Taint alone cannot rule
 out recovered diagnostics emitted while the only console connection was closed.
+The child retains one snapshot and reports TTY_KMSG_READY. The host requests
+each chunk by nonce and consecutive index only after consuming the preceding
+reply. This avoids bursting a log larger than the bounded MKTTY RX buffer;
+it does not claim reliable transport under unrelated output floods. Missing
+or corrupt chunks still fail the frozen verifier without repair or retries.
 The first two writes contain no newline to avoid terminal output conversion.
 Any deadline, extra event or premature free invalidates the run. Literal
 verifier fixtures cannot qualify native execution. Ring-writer retirement,

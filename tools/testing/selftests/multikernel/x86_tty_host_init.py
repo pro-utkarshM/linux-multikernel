@@ -15,6 +15,21 @@ from x86_admission_host_init import Console, Operation
 GATE = Path('/sys/kernel/debug/mk-native-concurrency-test')
 
 
+def capture_log(console):
+    # MKTTY has bounded RX storage, not transport-level flow control. Pull
+    # one chunk only after consuming the previous one; never pace by sleeps.
+    console.send('health')
+    ready = console.wait('TTY_KMSG_READY')
+    chunks = ready.get('chunks')
+    if type(chunks) is not int or not 0 < chunks <= 4096:
+        raise RuntimeError('invalid retained log transfer size')
+    for index in range(chunks):
+        console.send('log-next', index=index)
+        console.wait('TTY_KMSG', index=index)
+    console.wait('TTY_KMSG_COMPLETE', chunks=chunks)
+    console.wait('TTY_CHILD_HEALTH')
+
+
 def wait(predicate, seconds):
     deadline = time.monotonic() + seconds
     while time.monotonic() < deadline:
@@ -68,8 +83,7 @@ def tty(fd, pending, nonce, child, spare):
     if os.write(fd, b'1\n') != 2:
         raise RuntimeError('short reconnect selection')
     console = Console(fd, bytearray(), nonce)
-    console.send('health')
-    console.wait('TTY_CHILD_HEALTH')
+    capture_log(console)
     cli('kill', NAME)
     return console.pending
 
