@@ -36,6 +36,10 @@ def require_qemu(identity=Path('/sys/class/dmi/id')):
 
 def marker(name, **fields):
     print('MK_X86_' + name + ' ' + json.dumps(fields, sort_keys=True), flush=True)
+    # flush=True drains Python, not the serial device. Finish this marker
+    # before a following operation (e.g. MKTTY reconnect) can emit printk.
+    if sys.stdout.isatty():
+        termios.tcdrain(sys.stdout.fileno())
 
 
 def capture_tail(fd, pending, *, seconds=1):

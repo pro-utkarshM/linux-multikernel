@@ -33,7 +33,8 @@ def read_records(nonce):
     try:
         writer = os.open('/dev/kmsg', os.O_WRONLY)
         try:
-            message = b'<6>' + end
+            # Finalize this printk record before the nonblocking readback.
+            message = b'<6>' + end + b'\n'
             if os.write(writer, message) != len(message):
                 raise RuntimeError('short kernel-log end-marker write')
         finally:

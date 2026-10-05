@@ -12,6 +12,7 @@ from unittest import mock
 import test_verify_x86_nested as nested_fixture
 import test_verify_x86_tty as tty_fixture
 import verify_x86_tty
+import x86_kmsg
 
 NONCE = '1234567890abcdef'
 END = b'MKTTY_LOG_END_1234567890abcdef'
@@ -46,6 +47,32 @@ def trace(log=None):
 
 
 class KmsgReadback(unittest.TestCase):
+    def test_end_marker_is_finalized_before_nonblocking_read(self):
+        readable = [log_records()[0]]
+
+        def write(fd, message):
+            self.assertEqual(message, b'<6>MKTTY_LOG_END_1234567890abcdef\n')
+            readable.append(log_records()[1])
+            return len(message)
+
+        def read(fd, count):
+            if not readable:
+                raise BlockingIOError(errno.EAGAIN, 'unfinalized end marker')
+            return readable.pop(0)
+
+        with mock.patch.object(x86_kmsg.os, 'open', return_value=50), \
+                mock.patch.object(x86_kmsg.os, 'close'), \
+                mock.patch.object(x86_kmsg.os, 'write', side_effect=write), \
+                mock.patch.object(x86_kmsg.os, 'read', side_effect=read):
+            self.assertEqual(x86_kmsg.read_records(NONCE), log_records())
+
+    def test_short_end_marker_write_is_fatal(self):
+        with mock.patch.object(x86_kmsg.os, 'open', return_value=50), \
+                mock.patch.object(x86_kmsg.os, 'close'), \
+                mock.patch.object(x86_kmsg.os, 'write', side_effect=lambda fd, data: len(data) - 1):
+            with self.assertRaisesRegex(RuntimeError, 'short kernel-log end-marker write'):
+                x86_kmsg.read_records(NONCE)
+
     def verify(self, value):
         return verify_x86_tty.verify(value, nested_fixture.REVISION)
 
@@ -94,7 +121,7 @@ class KmsgReadback(unittest.TestCase):
                               [log_records()[1]], [b'x' * 65536]):
             with mock.patch.object(module.os, 'open', return_value=50), \
                     mock.patch.object(module.os, 'close'), \
-                    mock.patch.object(module.os, 'write', return_value=len(b'<6>' + END)), \
+                    mock.patch.object(module.os, 'write', side_effect=lambda fd, data: len(data)), \
                     mock.patch.object(module.os, 'read', side_effect=input_records):
                 if input_records == log_records():
                     self.assertEqual(module.read_records(NONCE), log_records())
