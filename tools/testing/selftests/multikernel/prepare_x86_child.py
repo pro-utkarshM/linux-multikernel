@@ -138,7 +138,8 @@ def main():
         inputs += [host_init, child_init, HERE / 'verify_x86_registry.py',
                    HERE / 'x86_admission_host_init.py', HERE / 'x86_rcu_host_init.py']
     if args.profile == 'tty':
-        inputs += [host_init, child_init, HERE / 'verify_x86_tty.py', HERE / 'x86_admission_host_init.py']
+        inputs += [host_init, child_init, HERE / 'verify_x86_tty.py',
+                   HERE / 'x86_admission_host_init.py', HERE / 'x86_kmsg.py']
     if args.profile == 'writer':
         inputs += [host_init, child_init, HERE / 'verify_x86_writer.py', HERE / 'x86_admission_host_init.py']
     if args.profile == 'destroy':
@@ -196,6 +197,8 @@ def main():
         install(HERE / 'x86_admission_host_init.py', 'usr/lib/python3/dist-packages/x86_admission_host_init.py')
     if args.profile == 'registry':
         install(HERE / 'x86_rcu_host_init.py', 'usr/lib/python3/dist-packages/x86_rcu_host_init.py')
+    if args.profile == 'tty':
+        install(HERE / 'x86_kmsg.py', 'usr/lib/python3/dist-packages/x86_kmsg.py')
     (root / 'init').chmod(0o755)
     (root / 'payload/source-revision').write_text(args.revision + '\n')
     # Reuse the same offline Python runtime; the child has no kernel payload.
@@ -227,6 +230,7 @@ def main():
         shutil.copy2(HERE / 'verify_x86_registry.py', bundle / 'verify_x86_registry.py')
     if args.profile == 'tty':
         shutil.copy2(HERE / 'verify_x86_tty.py', bundle / 'verify_x86_tty.py')
+        shutil.copy2(HERE / 'x86_kmsg.py', bundle / 'x86_kmsg.py')
     if args.profile == 'writer':
         shutil.copy2(HERE / 'verify_x86_writer.py', bundle / 'verify_x86_writer.py')
     if args.profile == 'destroy':

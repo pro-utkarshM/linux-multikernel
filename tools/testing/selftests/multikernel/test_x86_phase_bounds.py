@@ -12,6 +12,7 @@ import verify_x86_rcu
 import verify_x86_registry
 import verify_x86_tty
 import verify_x86_admission
+import test_x86_kmsg as kmsg_fixture
 
 
 class PhaseBounds(unittest.TestCase):
@@ -40,7 +41,9 @@ class PhaseBounds(unittest.TestCase):
                 elif profile == 'tty':
                     held, final = tty_fixture.TtyOracle().records()
                     middle = [mark('TTY_BEGIN', taint=0), mark('TTY_HELD', state=held),
-                              mark('TTY_COMPLETE', state=final, taint=0),
+                              mark('TTY_COMPLETE', state=final, taint=0)]
+                    middle += kmsg_fixture.transfer()
+                    middle += [
                               mark('TTY_CHILD_HEALTH', taint=0, online_cpus=[3, 4, 5],
                                    boot_id='a84d9504-2322-4ec3-94cc-f7cf9c19fddb')]
                     check = verify_x86_tty.verify

@@ -145,6 +145,12 @@ pointer identities and never dereferences freed memory.
 A second real OUTPUT must reach the native vector and find no connection.
 Only then reopen the console; require unchanged child boot identity, expected
 online CPUs and zero host/child taint before ordinary confirmed halt/unload.
+Before the health reply, retrieve the child's /dev/kmsg records from sequence
+zero through a nonce-tagged end marker written after reconnect. Length-framed,
+base64 chunks preserve bytes; require contiguous sequences, ordered chunks,
+byte/record counts and SHA256. Ring overrun, missing end marker, truncation or
+encoded warning/BUG/Oops/RCU stall fails qualification. Taint alone cannot rule
+out recovered diagnostics emitted while the only console connection was closed.
 The first two writes contain no newline to avoid terminal output conversion.
 Any deadline, extra event or premature free invalidates the run. Literal
 verifier fixtures cannot qualify native execution. Ring-writer retirement,

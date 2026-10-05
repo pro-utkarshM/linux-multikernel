@@ -2,10 +2,14 @@
 # SPDX-License-Identifier: GPL-2.0
 """Verify real selected MKTTY RX/last-close ordering and post-close delivery."""
 import argparse
+import base64
+import binascii
+import hashlib
 import json
 from pathlib import Path
 import re
 from verify_x86_nested import verify as verify_nested, validate_nested_bundle
+from x86_kmsg import MAX_LOG, validate_blob
 
 
 def verify_records(held, final):
@@ -48,6 +52,7 @@ def verify(trace, revision):
         held_at, held = one('TTY_HELD')
         final_at, final = one('TTY_COMPLETE')
         health_at, health = one('TTY_CHILD_HEALTH')
+        log_at, log = one('TTY_KMSG_COMPLETE')
         nonce = one('PING')[1]['nonce']
         child = one('CHILD_ALIVE')[1]
         confirmed = trace.find('Instance 1 (native-child) halted, all CPUs confirmed parked')
@@ -55,13 +60,32 @@ def verify(trace, revision):
             raise ValueError('MKTTY phases out of order')
         if any(v.get('nonce') != nonce for v in (begin, held, final, health)):
             raise ValueError('MKTTY nonce mismatch')
+        chunks = list(re.finditer(r'^MK_X86_TTY_KMSG (.*)$', trace, re.M))
+        if (log.get('nonce') != nonce or type(log.get('chunks')) is not int
+                or not 0 < log['chunks'] == len(chunks) <= 4096
+                or not final_at < log_at < health_at):
+            raise ValueError('missing or uncorrelated retained child log')
+        blob = bytearray()
+        for index, match in enumerate(chunks):
+            value = json.loads(match[1])
+            if (not final_at < match.start() < log_at or value.get('nonce') != nonce
+                    or type(value.get('index')) is not int or value['index'] != index
+                    or not isinstance(value.get('data'), str) or len(value['data']) > 4096):
+                raise ValueError('lost, duplicate, misordered or oversized log chunk')
+            blob.extend(base64.b64decode(value['data'], validate=True))
+            if len(blob) > MAX_LOG:
+                raise ValueError('retained log exceeds bound')
+        if (type(log.get('bytes')) is not int or log['bytes'] != len(blob)
+                or log.get('sha256') != hashlib.sha256(blob).hexdigest()):
+            raise ValueError('retained child log transfer mismatch')
+        validate_blob(bytes(blob), nonce, log.get('records'))
         if (any(v.get('taint') != 0 for v in (begin, final, health))
                 or health.get('boot_id') != child['boot_id']
                 or health.get('online_cpus') != child['physical_cpus']
                 or any(v['state']['cookie'] != nonce for v in (held, final))):
             raise ValueError('post-reconnect child health/identity not preserved')
         errors += verify_records(held['state'], final['state'])
-    except (KeyError, ValueError, TypeError) as error:
+    except (KeyError, ValueError, TypeError, binascii.Error) as error:
         errors.append(str(error))
     return errors
 
