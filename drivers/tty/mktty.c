@@ -28,6 +28,7 @@
 #include <linux/slab.h>
 #include <linux/tty.h>
 #include <linux/tty_flip.h>
+#include <linux/tty_ldisc.h>
 #include <linux/multikernel.h>
 #ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
 #include <asm/multikernel_test.h>
@@ -86,11 +87,18 @@ static void mktty_host_wake_work(struct work_struct *work)
 {
 	struct mktty_host_conn *conn = container_of(work, struct mktty_host_conn,
 							  wake_work);
+	unsigned long flags;
+	bool readable;
 #ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
 	bool observed = mk_native_tty_worker(conn);
 #endif
 
-	wake_up_interruptible(&conn->wait);
+	/* Pair with RX publication even when queue_work coalesces an enqueue. */
+	raw_spin_lock_irqsave(&conn->rx_lock, flags);
+	readable = conn->rx_head != conn->rx_tail;
+	raw_spin_unlock_irqrestore(&conn->rx_lock, flags);
+	if (readable)
+		wake_up_interruptible(&conn->wait);
 #ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
 	if (observed)
 		mk_native_tty_boundary((unsigned long)conn, 13);
@@ -371,8 +379,10 @@ static int mktty_host_init(void)
 
 	mktty_host_handler = multikernel_register_handler(mktty_host_ipi_handler,
 							  NULL, MKTTY_IPI_TYPE);
-	if (!mktty_host_handler)
-		pr_warn("mktty: failed to register IPI handler\n");
+	if (!mktty_host_handler) {
+		misc_deregister(&mktty_host_miscdev);
+		return -ENOMEM;
+	}
 
 	pr_info("mktty: host ready - open /dev/mktty, write instance ID, then read/write\n");
 	return 0;
@@ -512,8 +522,11 @@ static void mktty_spawn_close(struct tty_struct *tty, struct file *filp)
 
 static void mktty_spawn_hangup(struct tty_struct *tty)
 {
-	if (tty->index == 0)
+	if (tty->index == 0) {
 		tty_port_hangup(&mktty_spawn.port);
+		/* Core's first ldisc flush precedes driver hangup; RX is drained now. */
+		tty_ldisc_flush(tty);
+	}
 }
 
 static ssize_t mktty_spawn_write(struct tty_struct *tty, const u8 *buf,
@@ -694,8 +707,13 @@ static int mktty_spawn_init(void)
 
 	mktty_spawn_handler = multikernel_register_handler(mktty_spawn_ipi_handler,
 							   NULL, MKTTY_IPI_TYPE);
-	if (!mktty_spawn_handler)
-		pr_warn("mktty: failed to register IPI handler\n");
+	if (!mktty_spawn_handler) {
+		mktty_spawn_driver = NULL;
+		tty_unregister_driver(driver);
+		tty_driver_kref_put(driver);
+		tty_port_destroy(&mktty_spawn.port);
+		return -ENOMEM;
+	}
 
 	if (!mktty_console_registered) {
 		register_console(&mktty_spawn_console);
