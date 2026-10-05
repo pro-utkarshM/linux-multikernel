@@ -29,10 +29,14 @@ static bool test_hardirq;
 	do { assert(!test_hardirq); assert(!*(lock)); *(lock) = true; (flags) = 0; } while (0)
 #define spin_unlock_irqrestore(lock, flags) \
 	do { assert(*(lock)); *(lock) = false; (void)(flags); } while (0)
-#define DEFINE_RAW_SPINLOCK(name) DEFINE_SPINLOCK(name)
+typedef struct { bool held; } test_raw_lock_t;
+#define DEFINE_RAW_SPINLOCK(name) test_raw_lock_t name
+static void test_raw_lock(test_raw_lock_t *lock) { assert(!lock->held); lock->held = true; }
+static void test_raw_unlock(test_raw_lock_t *lock) { assert(lock->held); lock->held = false; }
 #define raw_spin_lock_irqsave(lock, flags) \
-	do { assert(!*(lock)); *(lock) = true; (flags) = 0; } while (0)
-#define raw_spin_unlock_irqrestore(lock, flags) spin_unlock_irqrestore(lock, flags)
+	do { test_raw_lock(lock); (flags) = 0; } while (0)
+#define raw_spin_unlock_irqrestore(lock, flags) \
+	do { test_raw_unlock(lock); (void)(flags); } while (0)
 #define msecs_to_jiffies(ms) (ms)
 #define DECLARE_WAIT_QUEUE_HEAD(name) int name
 #define wake_up_all(wait) ((void)(wait))
@@ -197,7 +201,7 @@ static int finish(struct mk_pending_msg *p)
 	int result = mk_msg_pending_wait(p, 0);
 
 	assert(list_empty(&mk_pending_msgs));
-	assert(!mk_pending_msgs_lock);
+	assert(!mk_pending_msgs_lock.held);
 	return result;
 }
 
@@ -606,7 +610,7 @@ static void failure_regressions(void)
 	cpu_ack();
 	mk_msg_pending_cancel(p);
 	cpu_ack();
-	assert(list_empty(&mk_pending_msgs) && !mk_pending_msgs_lock);
+	assert(list_empty(&mk_pending_msgs) && !mk_pending_msgs_lock.held);
 	send_error = 0;
 	assert(!mk_send_message(1, MK_MSG_NETWORK, MK_NET_VSOCK_PKT, NULL, 0));
 	expect("REGRESSION", "uncorrelated sender keeps zero ID",
@@ -622,7 +626,7 @@ static void failure_regressions(void)
 	assert(IS_ERR(p));
 	expect("FAILURE", "ID exhaustion refuses reuse", PTR_ERR(p), -EOVERFLOW);
 	assert(mk_last_msg_id == U64_MAX);
-	assert(list_empty(&mk_pending_msgs) && !mk_pending_msgs_lock);
+	assert(list_empty(&mk_pending_msgs) && !mk_pending_msgs_lock.held);
 }
 
 int main(int argc, char **argv)
@@ -637,7 +641,7 @@ int main(int argc, char **argv)
 				mk_msg_pending_id(irq_pending), 0);
 	test_hardirq = false;
 	assert(mk_msg_pending_wait(irq_pending, 1) == 0);
-	assert(list_empty(&mk_pending_msgs) && !mk_pending_msgs_lock);
+	assert(list_empty(&mk_pending_msgs) && !mk_pending_msgs_lock.held);
 
 	/* Queue creation/lifetime is exercised by cpu_work_test, not this fixture. */
 	mk_cpu_hotplug_wq = &cpu_queue;
