@@ -1,0 +1,49 @@
+Native concurrency qualification prerequisites
+=============================================
+
+This test-only branch extends the pinned #35/Kerf executing-child packer.
+It introduces no production message family or public interface. Do not include
+the native_concurrency_test object or its default-off Kconfig option in a
+production submission. Old six-CPU halt lanes remain unchanged.
+
+First gate: nested CPU pool roundtrip
+-----------------------------------
+
+Enable CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST=y and DEBUG_FS in an x86 GCC
+build. Build with build_x86_child.py from the explicit clean source so its
+mk-x86-build.json binds the successful source/tree/config/binary outputs.
+Use prepare_x86_child.py's existing arguments with --profile=nested.
+This uses the same pinned #35 packaging and Kerf; no package installation.
+
+Boot ONLY the documented disposable QEMU q35 VM:
+
+  timeout --kill-after=5s 240s qemu-system-x86_64 \
+    -machine q35 -accel tcg,thread=multi -cpu max -smp 8 -m 3072 \
+    -kernel "$bundle/bzImage" -initrd "$bundle/host-initrd.cpio.gz" \
+    -append 'console=ttyS0,115200 rdinit=/init panic=0 kernelcore=1G log_buf_len=4M mk_test=x86-nested-host mk_native_concurrency_test=1 nokaslr' \
+    -nographic -monitor none -nic none -no-reboot
+
+Run the frozen verifier, requiring BOTH actual VM and verifier exit success:
+
+  python3 -B "$bundle/verify_x86_nested.py" --bundle "$bundle" \
+    --revision "$revision" "$serial_log"
+
+Three physical CPUs remain with the host; three run a real 512 MiB child;
+two remain free. The child pools its last secondary with a 16 MiB chunk,
+returns it through a real /resources overlay, then removes every nested
+chunk. Require actual online/owned sets, empty free pool, zero local park/slot
+addresses, specific successful transactions, and parent confirmed halt/unload.
+The root-only local_snapshot is protected by mk_overlay_mutex and reports
+full-width physical IDs. It does not inject a stop or claim cached park flags
+prove execution has stopped. The option AND explicit boot parameter AND known
+QEMU DMI identity must be present, including in the child.
+
+If return/teardown fails, preserve allocations and raw output; do not force
+recovery to make this normal roundtrip pass. The VM can then be discarded.
+No CPU pool/controller race can be qualified before this prerequisite passes.
+This gate alone is NOT native worker/controller, callback, IRQ/RCU, writer,
+PREEMPT_RT, DMA, crash-kexec or physical-hardware proof.
+
+Run all test_*.py via Python unittest discovery and the existing *_test.sh
+runners. test_verify_x86_nested.py exercises false-pass evidence mutations;
+its fabricated trace is a verifier unit test, never native qualification.
