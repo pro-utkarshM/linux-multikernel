@@ -50,7 +50,8 @@ def verify(trace, revision):
         health_at, health = one('TTY_CHILD_HEALTH')
         nonce = one('PING')[1]['nonce']
         child = one('CHILD_ALIVE')[1]
-        if not begin_at < held_at < final_at < health_at:
+        confirmed = trace.find('Instance 1 (native-child) halted, all CPUs confirmed parked')
+        if not one('NESTED_POOL_RETIRED')[0] < begin_at < held_at < final_at < health_at < confirmed:
             raise ValueError('MKTTY phases out of order')
         if any(v.get('nonce') != nonce for v in (begin, held, final, health)):
             raise ValueError('MKTTY nonce mismatch')

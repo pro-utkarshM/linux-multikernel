@@ -73,7 +73,9 @@ def verify(trace, revision):
     try:
         ping = re.search(r'^MK_X86_PING (.*)$', trace, re.M)
         nonce = json.loads(ping[1])['nonce']
-        if (records[0][0] >= records[1][0]
+        retired = list(re.finditer(r'^MK_X86_NESTED_POOL_RETIRED ', trace, re.M))
+        confirmed = trace.find('Instance 1 (native-child) halted, all CPUs confirmed parked')
+        if (len(retired) != 1 or not retired[0].start() < records[0][0] < records[1][0] < confirmed
                 or any(value['nonce'] != nonce or value['state']['cookie'] != nonce for _, value in records)):
             return errors + ['RCU nonce or observation ordering mismatch']
         return errors + verify_records(records[0][1]['state'], records[1][1]['state'])

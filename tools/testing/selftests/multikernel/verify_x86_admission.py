@@ -58,6 +58,11 @@ def verify(trace, expected_revision=None):
                            ('ADMISSION_DRAIN_WAITING', None), ('ADMISSION_COMPLETE', None)]
         if [(n, v.get('mode')) for n, v, _ in marks] != expected_names:
             raise ValueError('missing, extra or reordered admission phase markers')
+        retired_at = [p for n, _, p in records if n == 'NESTED_POOL_RETIRED']
+        halted_at = [p for n, _, p in records if n == 'NESTED_HALTED']
+        if (len(retired_at) != 1 or len(halted_at) != 1
+                or not retired_at[0] < marks[0][2] < marks[-1][2] < halted_at[0]):
+            raise ValueError('admission phase lies outside prerequisite/settlement boundaries')
 
         def checkpoint(point, request=None, cpu=None, operation=None, result=0):
             found = [e for e in native if e['point'] == point

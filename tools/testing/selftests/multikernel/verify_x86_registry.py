@@ -83,17 +83,21 @@ def verify(trace, revision, mode):
         held_at, held = one('REGISTRY_HELD')
         done_at, final = one('REGISTRY_COMPLETE')
         nonce = one('PING')[1]['nonce']
-        if (held_at >= done_at or held['mode'] != mode or final['mode'] != mode
+        if (not one('NESTED_POOL_RETIRED')[0] < held_at < done_at
+                or held['mode'] != mode or final['mode'] != mode
                 or any(v['nonce'] != nonce or v['state']['cookie'] != nonce for v in (held, final))):
             raise ValueError('registry request correlation mismatch')
         errors += verify_records(held['state'], final['state'], mode)
         if terminal:
             at, retained = one('REGISTRY_RETAINED')
-            if (at <= done_at or retained['assigned_cpus'] != one('NESTED_BEGIN')[1]['child_cpus']
+            if (not done_at < at < one('NESTED_HOST_SURVIVED')[0]
+                    or retained['assigned_cpus'] != one('NESTED_BEGIN')[1]['child_cpus']
                     or retained['status'] != 'active' or retained['reclamation'] != 'not-attempted'
                     or re.search(r'MK_X86_NESTED_(?:HALTED|UNLOADED)|all CPUs confirmed parked'
                                  r'|kexec_file: Unloading', trace)):
                 raise ValueError('terminal cleanup cannot qualify normal instance reclamation')
+        elif done_at >= trace.find('Instance 1 (native-child) halted, all CPUs confirmed parked'):
+            raise ValueError('registry lifetime phase must precede confirmed halt')
     except (KeyError, ValueError, TypeError) as error:
         errors.append(str(error))
     return errors
