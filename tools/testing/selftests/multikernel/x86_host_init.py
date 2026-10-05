@@ -206,7 +206,9 @@ def workload():
         '--memory=512MB')
     assert ownership() == child
     status('ready')
-    diagnostic = ' mk_cpu_reonline_probe=1' if options.get('mk_x86_reonline') == '1' else ''
+    nonce = secrets.token_hex(8)
+    diagnostic = (f' mk_cpu_reonline_probe=1 mk_cpu_reonline_nonce={nonce}'
+                  if options.get('mk_x86_reonline') == '1' else '')
     cli('load', NAME, '--kernel=/payload/vmlinux',
         '--initrd=/payload/child-initrd.cpio.gz', '--console=mktty0',
         '--cmdline=rdinit=/init panic=0 loglevel=7 mk_test=x86-child' + diagnostic)
@@ -219,7 +221,6 @@ def workload():
         deadline = time.monotonic() + 90
         pending = bytearray()
         alive = reply = False
-        nonce = secrets.token_hex(8)
         while time.monotonic() < deadline and not reply:
             if not select.select([fd], [], [], 1)[0]:
                 continue

@@ -167,16 +167,18 @@ permit unload. This models inability to prove stop, NOT a real CPU proven to
 be executing the Image, and does not qualify IRQ/RCU or bulk cleanup races.
 
 Ordinary child CPU re-online diagnostic: use the existing six-CPU halt profile
-with HOST mk_x86_reonline=1. After the nonce handshake the child offlines its
-logical CPU1 through sysfs, then attempts to online it again. No pool donation,
+with HOST mk_x86_reonline=1 and QEMU -debugcon file:/absolute/fresh/debug.log.
+The host passes a fresh nonce in the child boot arguments. Before opening MKTTY
+the child offlines its logical CPU1 through sysfs, then attempts to online it again. No pool donation,
 held RX work, fault selector or kernel observer is involved. Records bind the
 nonce and physical CPU to the before/offline/result topology; success also
-requires scheduling the child task on that CPU. A write error or deadline
-aborts the host workload before halt/unload; the disposable VM then ends.
+requires scheduling the child task on that CPU. Records go to QEMU port0xe9
+through /dev/port, independent of MKTTY. The diagnostic child never enters the
+normal handshake; the host times out before halt/unload and ends the VM.
 This diagnostic is not a pool-return pass or a safe-reclamation qualification.
 Keep its failed raw trace and compare an independently pinned baseline. The
 normal halt verifier must still fail on a failed re-online diagnostic.
 The diagnostic forwards mk_cpu_reonline_probe=1 and reports a disabled child
 debug_locks value honestly rather than stopping before the probe. A zero value
 or any kernel diagnostic remains a failure under the unchanged halt verifier;
-the override is never used in ordinary qualification runs.
+the separate probe path is never used in ordinary qualification runs.

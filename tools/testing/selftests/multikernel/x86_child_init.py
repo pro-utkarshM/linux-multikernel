@@ -40,19 +40,41 @@ def main():
     mount('devtmpfs', '/dev', 'devtmpfs')
     sys.path.insert(0, '/usr/lib/python3/dist-packages')
     from kerf.topology import logical_to_apic
+    options = dict(arg.split('=', 1) for arg in Path('/proc/cmdline').read_text().split()
+                   if '=' in arg)
+    if options.get('mk_cpu_reonline_probe') == '1':
+        # Isolate hotplug attribution from the baseline's broken MKTTY/IRQ
+        # path. QEMU debugcon is a diagnostic sink, not a lifecycle oracle.
+        from x86_reonline import child_probe, diagnostic_debug_locks
+        port = os.open('/dev/port', os.O_WRONLY)
+
+        def debug_marker(name, **fields):
+            line = ('MK_X86_' + name + ' ' + json.dumps(fields, sort_keys=True) + '\n').encode()
+            for byte in line:
+                if os.pwrite(port, bytes([byte]), 0xe9) != 1:
+                    raise RuntimeError('short debugcon write')
+
+        nonce = options['mk_cpu_reonline_nonce']
+        debug_marker('PROBE_BOOT', nonce=nonce, debug_locks=diagnostic_debug_locks(),
+                     boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip(),
+                     release=os.uname().release)
+        try:
+            child_probe(nonce, debug_marker)
+        except Exception as error:
+            debug_marker('PROBE_ERROR', nonce=nonce, error=repr(error))
+        finally:
+            os.close(port)
+        # No normal handshake/teardown claim after this diagnostic operation.
+        import time
+        while True:
+            time.sleep(1)
     fd = os.open('/dev/mktty0', os.O_RDWR)
     for target in (0, 1, 2):
         os.dup2(fd, target)
     if fd > 2:
         os.close(fd)
-    lockdep = read_debug_locks
-    if 'mk_cpu_reonline_probe=1' in Path('/proc/cmdline').read_text().split():
-        # Attribution only: expose baseline debug_locks=0 honestly. The normal
-        # frozen verifier still rejects it; never relax acceptance boundaries.
-        from x86_reonline import diagnostic_debug_locks
-        lockdep = diagnostic_debug_locks
     marker('CHILD_ALIVE', pid=os.getpid(), instance=1,
-           debug_locks=lockdep(),
+           debug_locks=read_debug_locks(),
            online=Path('/sys/devices/system/cpu/online').read_text().strip(),
            physical_cpus=sorted(logical_to_apic().values()),
            boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip(),
