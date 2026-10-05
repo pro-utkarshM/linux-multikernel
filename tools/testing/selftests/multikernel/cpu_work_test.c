@@ -554,6 +554,13 @@ int main(void)
 	drain(active_queue());
 	expect("failed remove leaves CPU online", online[0], 1);
 	expect("remove error echoed", (int)replies[2].ack.result, -EBUSY);
+	{
+		bool rejected_admission = false;
+		for (i = 0; i < native_count; i++)
+			rejected_admission |= native_events[i].msg == 15 &&
+				native_events[i].point == MK_NATIVE_CPU_BUSY;
+		expect("mutation EBUSY must not masquerade as rejected admission", rejected_admission, 0);
+	}
 	mk_hotplug_cleanup();
 	reset();
 

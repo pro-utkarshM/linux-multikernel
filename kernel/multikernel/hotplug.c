@@ -362,11 +362,13 @@ static void mk_cpu_add_work_fn(struct work_struct *work)
 #endif
 		ret = mk_do_cpu_add(hp_work->cpu_id, hp_work->numa_node, hp_work->flags);
 		mutex_unlock(&mk_overlay_mutex);
-	}
 #ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
-	if (ret == -EBUSY)
+	} else {
 		mk_native_checkpoint(MK_NATIVE_CPU_BUSY, hp_work->msg_id,
 				     hp_work->cpu_id, ret, hp_work->operation);
+#endif
+	}
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
 	mk_native_checkpoint(MK_NATIVE_CPU_BEFORE_ACK, hp_work->msg_id,
 			     hp_work->cpu_id, ret, hp_work->operation);
 #endif
@@ -405,11 +407,13 @@ static void mk_cpu_remove_work_fn(struct work_struct *work)
 #endif
 		ret = mk_do_cpu_remove(hp_work->cpu_id);
 		mutex_unlock(&mk_overlay_mutex);
-	}
 #ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
-	if (ret == -EBUSY)
+	} else {
 		mk_native_checkpoint(MK_NATIVE_CPU_BUSY, hp_work->msg_id,
 				     hp_work->cpu_id, ret, hp_work->operation);
+#endif
+	}
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
 	mk_native_checkpoint(MK_NATIVE_CPU_BEFORE_ACK, hp_work->msg_id,
 			     hp_work->cpu_id, ret, hp_work->operation);
 #endif

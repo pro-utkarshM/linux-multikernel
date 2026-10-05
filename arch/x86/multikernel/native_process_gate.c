@@ -124,10 +124,10 @@ static ssize_t gate_release_write(struct file *file, const char __user *data,
 	return count;
 }
 static const struct file_operations gate_arm_fops = {
-	.owner = THIS_MODULE, .write = gate_arm_write, .llseek = no_llseek,
+	.owner = THIS_MODULE, .write = gate_arm_write,
 };
 static const struct file_operations gate_release_fops = {
-	.owner = THIS_MODULE, .write = gate_release_write, .llseek = no_llseek,
+	.owner = THIS_MODULE, .write = gate_release_write,
 };
 
 static int events_show(struct seq_file *seq, void *unused)
