@@ -19,6 +19,11 @@ MODES = ('spawn-close', 'spawn-hangup', 'spawn-overflow', 'spawn-offline')
 TIOCVHANGUP = 0x5437
 
 
+def raw_mode(fd):
+    # Never let the harness flush bytes that should expose stale delivery.
+    tty.setraw(fd, termios.TCSANOW)
+
+
 def read_exact(fd, expected):
     result = bytearray()
     deadline = time.monotonic() + 10
@@ -66,7 +71,7 @@ def child(nonce, mode):
     session = number <= 2
     os.sched_setaffinity(0, {1})
     attrs = termios.tcgetattr(0)
-    tty.setraw(0)
+    raw_mode(0)
     (GATE / 'spawn_tty_arm').write_text(f'{number} {nonce}')
     marker('SPAWN_READY', nonce=nonce, mode=mode)
     expected = 20000 if number == 3 else 32
@@ -106,7 +111,7 @@ def child(nonce, mode):
                 os.dup2(fd, target)
         if fd > 2:
             os.close(fd)
-        tty.setraw(0)
+        raw_mode(0)
         marker('SPAWN_REOPENED', nonce=nonce, mode=mode)
         fresh = 'MKTTY_FRESH_' + nonce
         read_exact(0, fresh.encode())
@@ -115,7 +120,8 @@ def child(nonce, mode):
         received = read_exact(0, b'X' * (16384 if number == 3 else 32))
         outcome.update(received=len(received), sha256=hashlib.sha256(received).hexdigest())
     final = wait(lambda s: s['worker_done'] and (not session or s['reopened']))
-    # Worker is finished and the host sends no more input until COMPLETE.
+    # The selected invocation is finished; this is an immediate trailing-byte
+    # check, not a drain/proof of every later RX or flip-work invocation.
     if select.select([0], [], [], 0)[0] and os.read(0, 1):
         raise RuntimeError('duplicate or stale trailing input')
     if old_hung_file is not None:

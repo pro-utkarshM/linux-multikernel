@@ -104,6 +104,11 @@ serial-print time. All modes retain full child kmsg transfer, live lockdep,
 confirmed halt/unload and host-survival requirements. Observer task references
 are retained for this one-shot VM. All observer hooks are excluded from the
 production submission; no new production ABI is introduced.
+Raw-mode setup uses TCSANOW: the harness must not discard stale input itself.
+The drain observer requires workqueue's from_cancel identity, not an ordinary
+flush_work barrier. Selected-worker completion plus a trailing readability
+check does not independently prove all later RX/flip work quiescent. No such
+whole-path qualification is claimed by these lanes.
 
 This boot slice requires six distinct physical IDs resolved from /proc/cpuinfo:
 two host CPUs, two assigned child CPUs and two spare pool CPUs. The host gives

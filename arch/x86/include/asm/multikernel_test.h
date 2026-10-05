@@ -57,7 +57,7 @@ bool mk_native_spawn_tty_queue(struct work_struct *work);
 void mk_native_spawn_tty_rx(unsigned int size, unsigned int accepted, unsigned int queued);
 void mk_native_spawn_tty_shutdown(struct work_struct *work, bool done, unsigned int lost);
 void mk_native_spawn_tty_activate(void);
-void mk_native_spawn_tty_barrier(struct work_struct *work, struct completion *done);
+void mk_native_spawn_tty_barrier(struct work_struct *work, struct completion *done, bool from_cancel);
 void mk_native_spawn_tty_wait(struct completion *done);
 void mk_native_writer_init(struct dentry *directory);
 void mk_native_writer_claim(struct mk_instance *instance, void *data, size_t size);

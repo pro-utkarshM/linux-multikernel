@@ -26,7 +26,7 @@ def verify_spawn_records(mode, held, final):
         for state, done in ((held, False), (final, True)):
             flags = dict(failed=False, released=done, worker_done=done,
                          drained=done and session, reopened=done and session,
-                         drain_waiting=not done and session, rx_irq=True)
+                         drain_waiting=not done and session, rx_irq=True, cancel=session)
             if any(state.get(k) is not v for k, v in flags.items()):
                 raise ValueError('spawn hold/drain/activation/context not proven')
             counts = dict(mode=number, input=20000 if number == 3 else 32,
@@ -43,12 +43,13 @@ def verify_spawn_records(mode, held, final):
         events = final['events']
         if len(events) != len(points) or held['events'] != events[:5 if number == 2 else 4 if session else 2]:
             raise ValueError('spawn event count/prefix mismatch')
-        for i, (event, point) in enumerate(zip(events, points), 1):
-            if (any(type(event.get(k)) is not int for k in ('seq', 'point', 'cpu'))
-                    or event['seq'] != i or event['point'] != point
-                    or event['cpu'] not in (0, 1, 2)
-                    or event.get('hardirq') is not False or event.get('vector') is not False):
-                raise ValueError('spawn worker sequence/context mismatch')
+        for sample in (held['events'], events):
+            for i, (event, point) in enumerate(zip(sample, points), 1):
+                if (any(type(event.get(k)) is not int for k in ('seq', 'point', 'cpu'))
+                        or event['seq'] != i or event['point'] != point
+                        or event['cpu'] not in (0, 1, 2)
+                        or event.get('hardirq') is not False or event.get('vector') is not False):
+                    raise ValueError('spawn worker sequence/context mismatch')
         if number == 4:
             if any(e['cpu'] != 2 for e in events if e['point'] in (1, 2)):
                 raise ValueError('worker not executing on selected offline CPU')
@@ -155,9 +156,12 @@ def verify(trace, revision, mode='ipi'):
                         or final.get('sha256') != hashlib.sha256(b'X' * count).hexdigest()):
                     raise ValueError('spawn delivery bytes mismatch')
             if mode == 'spawn-offline':
-                if (held.get('offline') != [0, 1] or final.get('offline') != [0, 1]
-                        or final.get('restored') != [0, 1, 2]):
-                    raise ValueError('CPU offline did not overlap worker continuation')
+                for value, expected in ((held.get('offline'), [0, 1]),
+                                        (final.get('offline'), [0, 1]),
+                                        (final.get('restored'), [0, 1, 2])):
+                    if (type(value) is not list or any(type(cpu) is not int for cpu in value)
+                            or value != expected):
+                        raise ValueError('CPU offline did not overlap worker continuation')
         else:
             errors += verify_records(held['state'], final['state'])
     except (KeyError, ValueError, TypeError, binascii.Error) as error:

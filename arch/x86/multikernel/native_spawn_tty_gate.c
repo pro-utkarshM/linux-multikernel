@@ -19,7 +19,7 @@ static struct work_struct *rx_work;
 static struct task_struct *closer;
 static struct completion *drain_done;
 static bool available, armed, entered, released, failed, worker_done;
-static bool drained, reopened, prepared, rx_irq = true;
+static bool drained, reopened, prepared, cancel, rx_irq = true;
 static unsigned int mode, input, copied, dropped, peak, dequeued, discarded, inserted;
 static u64 cookie;
 struct spawn_event { unsigned int point, cpu; bool irq, vector; };
@@ -152,10 +152,14 @@ void mk_native_spawn_tty_activate(void)
 	smp_store_release(&reopened, true);
 }
 
-void mk_native_spawn_tty_barrier(struct work_struct *work, struct completion *done)
+void mk_native_spawn_tty_barrier(struct work_struct *work, struct completion *done, bool from_cancel)
 {
-	if (current == READ_ONCE(closer) && work == READ_ONCE(rx_work))
+	if (current == READ_ONCE(closer) && work == READ_ONCE(rx_work)) {
+		WRITE_ONCE(cancel, from_cancel);
+		if (!from_cancel)
+			WRITE_ONCE(failed, true);
 		WRITE_ONCE(drain_done, done);
+	}
 }
 
 void mk_native_spawn_tty_wait(struct completion *done)
@@ -218,11 +222,12 @@ static int status_show(struct seq_file *seq, void *unused)
 	raw_spin_lock_irqsave(&state_lock, flags);
 	seq_printf(seq, "{\"mode\":%u,\"cookie\":\"%016llx\",\"work\":\"%px\","
 		   "\"failed\":%s,\"released\":%s,\"worker_done\":%s,\"drained\":%s,"
-		   "\"reopened\":%s,\"drain_waiting\":%s,\"input\":%u,\"copied\":%u,"
+		   "\"reopened\":%s,\"cancel\":%s,\"drain_waiting\":%s,\"input\":%u,\"copied\":%u,"
 		   "\"dropped\":%u,\"peak\":%u,\"dequeued\":%u,\"discarded\":%u,\"inserted\":%u,\"rx_irq\":%s,\"events\":[",
 		   mode, cookie, rx_work, READ_ONCE(failed) ? "true" : "false",
 		   READ_ONCE(released) ? "true" : "false", smp_load_acquire(&worker_done) ? "true" : "false",
 		   smp_load_acquire(&drained) ? "true" : "false", smp_load_acquire(&reopened) ? "true" : "false",
+		   READ_ONCE(cancel) ? "true" : "false",
 		   waiting ? "true" : "false", input, copied, dropped, peak, dequeued, discarded, inserted,
 		   rx_irq ? "true" : "false");
 	for (i = 0; i < nr_events; i++)

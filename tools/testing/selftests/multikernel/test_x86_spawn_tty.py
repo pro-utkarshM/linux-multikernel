@@ -5,6 +5,10 @@ import copy
 import importlib.util
 from pathlib import Path
 import socket
+import os
+import select
+import termios
+import tty
 import hashlib
 import json
 import unittest
@@ -24,6 +28,7 @@ def records(mode):
     held = dict(mode=number, cookie='1234567890abcdef', work='ffff0100', failed=False,
                 released=False, worker_done=False, drained=False, reopened=False,
                 drain_waiting=session, input=20000 if number == 3 else 32,
+                cancel=session,
                 copied=16384 if number == 3 else 32, dropped=3616 if number == 3 else 0,
                 peak=16384 if number == 3 else 32, dequeued=32 if session else 0,
                 discarded=0, inserted=0, rx_irq=True, events=events[:5 if number == 2 else 4 if session else 2])
@@ -34,6 +39,33 @@ def records(mode):
 
 
 class SpawnOracle(unittest.TestCase):
+    def test_raw_mode_must_preserve_already_queued_input(self):
+        import x86_spawn_tty as driver
+        master, slave = os.openpty()
+        try:
+            tty.setraw(slave, termios.TCSANOW)
+            os.write(master, b'old')
+            self.assertTrue(select.select([slave], [], [], 1)[0])
+            # Before the fix, the driver calls this default flushing operation.
+            getattr(driver, 'raw_mode', tty.setraw)(slave)
+            self.assertTrue(select.select([slave], [], [], 0)[0], 'raw mode erased stale-input evidence')
+            self.assertEqual(os.read(slave, 3), b'old')
+        finally:
+            os.close(master)
+            os.close(slave)
+
+    def test_ordinary_flush_cannot_substitute_for_cancellation(self):
+        held, final = records('spawn-close')
+        held['cancel'] = False
+        self.assertTrue(self.check('spawn-close', held, final))
+
+    def test_held_schema_independent_of_final_prefix(self):
+        for key, value in (('seq', True), ('hardirq', 0), ('vector', 0), ('cpu', True)):
+            held, final = records('spawn-close')
+            held = copy.deepcopy(held)
+            held['events'][0][key] = value
+            self.assertTrue(self.check('spawn-close', held, final))
+
     def test_exact_receive_rejects_stale_bytes_and_truncation(self):
         path = Path(__file__).with_name('x86_spawn_tty.py')
         self.assertTrue(path.exists(), 'spawn session driver missing')
@@ -134,6 +166,16 @@ class SpawnOracle(unittest.TestCase):
                 middle += [mark('TTY_CHILD_HEALTH', taint=0, online_cpus=[3, 4, 5], boot_id='a84d9504-2322-4ec3-94cc-f7cf9c19fddb')]
                 return ''.join(nested[:7] + middle + [s.replace('nested-pool-prerequisite', 'native-tty') for s in nested[7:]])
             self.assertEqual(verifier.verify(trace(), nested_fixture.REVISION, mode), [])
+            if mode == 'spawn-offline':
+                fields['offline'] = [False, True]
+                self.assertTrue(verifier.verify(trace(), nested_fixture.REVISION, mode))
+                fields['offline'] = [0, 1]
+                extra['offline'] = [False, True]
+                self.assertTrue(verifier.verify(trace(), nested_fixture.REVISION, mode))
+                extra['offline'] = [0, 1]
+                fields['restored'] = [False, True, 2]
+                self.assertTrue(verifier.verify(trace(), nested_fixture.REVISION, mode))
+                fields['restored'] = [0, 1, 2]
             if mode == 'spawn-offline':
                 fields['offline'] = [0, 1, 2]
             elif mode == 'spawn-overflow':
