@@ -23,13 +23,15 @@ static bool allocation_fails;
 #define pr_warn(...) fprintf(stderr, __VA_ARGS__)
 #define pr_info(...) do { } while (0)
 #define pr_debug(...) do { } while (0)
+static bool test_hardirq;
 #define DEFINE_SPINLOCK(name) bool name
 #define spin_lock_irqsave(lock, flags) \
-	do { assert(!*(lock)); *(lock) = true; (flags) = 0; } while (0)
+	do { assert(!test_hardirq); assert(!*(lock)); *(lock) = true; (flags) = 0; } while (0)
 #define spin_unlock_irqrestore(lock, flags) \
 	do { assert(*(lock)); *(lock) = false; (void)(flags); } while (0)
 #define DEFINE_RAW_SPINLOCK(name) DEFINE_SPINLOCK(name)
-#define raw_spin_lock_irqsave(lock, flags) spin_lock_irqsave(lock, flags)
+#define raw_spin_lock_irqsave(lock, flags) \
+	do { assert(!*(lock)); *(lock) = true; (flags) = 0; } while (0)
 #define raw_spin_unlock_irqrestore(lock, flags) spin_unlock_irqrestore(lock, flags)
 #define msecs_to_jiffies(ms) (ms)
 #define DECLARE_WAIT_QUEUE_HEAD(name) int name
@@ -625,6 +627,18 @@ static void failure_regressions(void)
 
 int main(int argc, char **argv)
 {
+	struct mk_pending_msg *irq_pending;
+
+	/* Real ACK completion is dispatched by a hard IPI, not a threaded IRQ. */
+	irq_pending = mk_msg_pending_add(MK_MSG_RESOURCE, MK_RES_CPU_ADD, 7);
+	assert(!IS_ERR(irq_pending));
+	test_hardirq = true;
+	mk_msg_pending_complete(MK_MSG_RESOURCE, MK_RES_CPU_ADD, 7,
+				mk_msg_pending_id(irq_pending), 0);
+	test_hardirq = false;
+	assert(mk_msg_pending_wait(irq_pending, 1) == 0);
+	assert(list_empty(&mk_pending_msgs) && !mk_pending_msgs_lock);
+
 	/* Queue creation/lifetime is exercised by cpu_work_test, not this fixture. */
 	mk_cpu_hotplug_wq = &cpu_queue;
 	mk_hotplug_accepting = true;
