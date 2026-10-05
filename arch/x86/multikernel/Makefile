@@ -4,3 +4,4 @@
 #
 
 obj-y += spawn.o direct_boot.o head_64.o e820.o
+obj-$(CONFIG_MK_X86_NATIVE_CONFIRM_TEST) += native_confirm_test.o

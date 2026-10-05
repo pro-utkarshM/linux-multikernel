@@ -23,6 +23,10 @@ struct mk_instance;
 struct mk_spawn_context;
 struct mk_ident_pgtable;
 
+#ifdef CONFIG_MK_X86_NATIVE_CONFIRM_TEST
+bool mk_x86_native_confirm_failure(u64 phys_cpu);
+#endif
+
 #ifdef CONFIG_MULTIKERNEL
 /* Per-instance spawn state, carved from the control block on first spawn */
 struct mk_instance_arch {

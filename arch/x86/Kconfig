@@ -2032,6 +2032,16 @@ config ARCH_HAS_MK_HOST_PARK
 config ARCH_HAS_MK_FORCE_STOP
 	def_bool X86_64
 
+config MK_X86_NATIVE_CONFIRM_TEST
+	bool "Test-only multikernel stop-confirmation failure injection"
+	depends on X86_64 && MULTIKERNEL && DEBUG_FS
+	default n
+	help
+	  Disposable VM qualification only. An additional explicit boot parameter
+	  enables a root-only debugfs selector and allocation snapshot. Selecting
+	  one physical CPU makes stop confirmation fail without changing its park
+	  state. Do not include this option or file in a production submission.
+
 config ARCH_SUPPORTS_CRASH_DUMP
 	def_bool X86_64 || (X86_32 && HIGHMEM)
 

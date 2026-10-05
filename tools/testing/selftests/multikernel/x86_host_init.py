@@ -6,6 +6,7 @@ Only use as PID 1 in the explicitly guarded disposable QEMU guest.
 This slice is not worker/IRQ-lifetime concurrency qualification.
 """
 import ctypes
+import errno
 import json
 import os
 from pathlib import Path
@@ -53,12 +54,59 @@ def status(expected):
     return actual
 
 
+def failed_force_retention(child):
+    from kerf.kill.main import halt_multikernel
+    from kerf.unload.main import kexec_file_unload, KEXEC_FILE_UNLOAD
+    from kerf.load.main import KEXEC_MULTIKERNEL, KEXEC_MK_ID
+    from kerf.dtc.overlay import OverlayGenerator
+    fault = Path('/sys/kernel/debug/mk-native-confirm-test')
+    if not (fault / 'fail_cpu').exists():
+        raise RuntimeError('explicit test-only confirmation interface missing')
+    before = json.loads((fault / 'snapshot').read_text())
+    owned = ownership()
+    assert before['state'] == 3 and owned == child
+    (fault / 'fail_cpu').write_text(str(child[-1]) + '\n')
+
+    def rejected(operation):
+        try:
+            operation()
+        except OSError as error:
+            assert error.errno == errno.EBUSY, error
+            return error.errno
+        raise RuntimeError('unsafe operation succeeded after failed confirmation')
+
+    rejected(lambda: halt_multikernel(1, force=True))
+    status('active')
+    unload_errno = rejected(lambda: kexec_file_unload(
+        KEXEC_MULTIKERNEL | KEXEC_MK_ID(1) | KEXEC_FILE_UNLOAD))
+
+    def destroy():
+        # Bypass Kerf's userspace state refusal, not the kernel guard. This is
+        # the existing removal overlay, written to the actual kernel entry.
+        blob = bytes(OverlayGenerator().generate_removal_overlay(NAME))
+        fd = os.open(BASE / 'overlays' / 'new', os.O_WRONLY | os.O_CLOEXEC)
+        try:
+            assert os.write(fd, blob) == len(blob)
+        finally:
+            os.close(fd)
+
+    destroy_errno = rejected(destroy)
+    after = json.loads((fault / 'snapshot').read_text())
+    assert before == after and ownership() == owned
+    marker('RETAINED', fault_cpu=child[-1], status=status('active'),
+           owned_cpus=owned, unload_errno=unload_errno, destroy_errno=destroy_errno,
+           allocations_before=before, allocations_after=after)
+    (fault / 'fail_cpu').write_text(str((1 << 64) - 1) + '\n')
+    marker('CONFIRM_FAULT_CLEAR', cpu=child[-1])
+    halt_multikernel(1, force=True)
+
+
 def workload():
     from kerf.topology import logical_to_apic
     options = dict(arg.split('=', 1) for arg in Path('/proc/cmdline').read_text().split()
                    if '=' in arg)
     halt = options.get('mk_x86_halt', 'requested')
-    if halt not in ('requested', 'force', 'poweroff', 'reboot'):
+    if halt not in ('requested', 'force', 'force-retain', 'poweroff', 'reboot'):
         raise ValueError('unsupported x86 halt lane')
     assert Path('/sys/devices/system/cpu/online').read_text().strip() == '0-5'
     ids = logical_to_apic()
@@ -112,7 +160,9 @@ def workload():
                     reply = True
         if not reply:
             raise RuntimeError('real child handshake timed out')
-        if halt == 'force':
+        if halt == 'force-retain':
+            failed_force_retention(child)
+        elif halt == 'force':
             cli('kill', NAME, '--force')
         elif halt == 'requested':
             cli('kill', NAME)
@@ -146,6 +196,8 @@ def main():
     mount('sysfs', '/sys', 'sysfs')
     mount('devtmpfs', '/dev', 'devtmpfs')
     mount('none', str(BASE), 'multikernel')
+    if 'mk_native_confirm_test=1' in Path('/proc/cmdline').read_text().split():
+        mount('none', '/sys/kernel/debug', 'debugfs')
     os.environ.update(PYTHONHOME='/usr', PYTHONPATH='/usr/lib/python3/dist-packages',
                       PYTHONDONTWRITEBYTECODE='1', PATH='/bin:/usr/bin')
     sys.path.insert(0, '/usr/lib/python3/dist-packages')

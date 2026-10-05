@@ -94,6 +94,37 @@ class X86ChildGate(unittest.TestCase):
             self.assertEqual(self.verify(''.join(trace), halt=halt), [])
             self.assertTrue(self.verify(''.join(self.trace()), halt=halt))
 
+    def retention_trace(self):
+        trace = self.trace()
+        allocations = {'image': 'ffff888000001000', 'ring': 'ffff888040001000',
+                       'ring_phys': '40001000', 'control': '40002000',
+                       'context': '40003000', 'pool': 'ffff888000002000',
+                       'pool_size': 536870912, 'state': 3}
+        retained = {'fault_cpu': 3, 'status': 'active', 'owned_cpus': [2, 3],
+                    'unload_errno': 16, 'destroy_errno': 16,
+                    'allocations_before': allocations, 'allocations_after': allocations}
+        trace[4] = ('Sent NMI to 2 CPUs in instance 1\n'
+                    'MK_X86_TEST_CONFIRM_FAIL phys=3\n'
+                    'MK_X86_RETAINED ' + json.dumps(retained) + '\n'
+                    'MK_X86_CONFIRM_FAULT_CLEAR {"cpu":3}\n'
+                    'Sent NMI to 2 CPUs in instance 1\n' + trace[4])
+        trace[5] = trace[5].replace('"status":', '"mode": "force-retain", "status":')
+        return ''.join(trace)
+
+    def test_failed_confirmation_retains_every_allocation_and_refuses_reclaim(self):
+        self.assertEqual(self.verify(self.retention_trace(), halt='force-retain'), [])
+
+    def test_retention_cannot_accept_missing_injection_or_changed_allocations(self):
+        for old, new in (('MK_X86_TEST_CONFIRM_FAIL phys=3', 'other failure'),
+                         ('"unload_errno": 16', '"unload_errno": 0'),
+                         ('"destroy_errno": 16', '"destroy_errno": 0'),
+                         ('"status": "active"', '"status": "loaded"'),
+                         ('"image": "ffff888000001000"', '"image": "0000000000000000"'),
+                         ('MK_X86_CONFIRM_FAULT_CLEAR', 'OTHER_EVENT')):
+            with self.subTest(new=new):
+                self.assertTrue(self.verify(self.retention_trace().replace(old, new),
+                                            halt='force-retain'))
+
 
 if __name__ == '__main__':
     unittest.main()

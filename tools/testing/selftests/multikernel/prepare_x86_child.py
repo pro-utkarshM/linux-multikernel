@@ -101,7 +101,7 @@ def main():
     source_head = command('git', '-C', str(args.source), 'rev-parse', 'HEAD')
     inputs = [args.kernel_build / 'arch/x86/boot/bzImage', args.kernel_build / 'vmlinux',
               config, HERE / 'x86_host_init.py', HERE / 'x86_child_init.py',
-              HERE / 'x86_child.config', Path(__file__).resolve()]
+              HERE / 'verify_x86_child.py', HERE / 'x86_child.config', Path(__file__).resolve()]
     hashes = {str(path.resolve()): digest(path) for path in inputs}
     print(json.dumps({'mode': 'prepare' if args.prepare else 'HOST_DRY_RUN_ONLY',
                       'source_head': source_head, 'artifact_revision': args.revision or 'UNATTESTED',
@@ -166,6 +166,7 @@ def main():
 
     pack(child, bundle / 'child-initrd.cpio.gz')
     install(bundle / 'child-initrd.cpio.gz', 'payload/child-initrd.cpio.gz')
+    shutil.copy2(HERE / 'verify_x86_child.py', bundle / 'verify_x86_child.py')
     install(args.kernel_build / 'vmlinux', 'payload/vmlinux')
     shutil.copy2(args.kernel_build / 'arch/x86/boot/bzImage', bundle / 'bzImage')
     shutil.copy2(config, bundle / 'kernel.config')

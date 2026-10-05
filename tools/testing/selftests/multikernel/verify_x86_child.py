@@ -62,14 +62,36 @@ def verify(trace, halt='requested'):
     confirm = trace.find('Instance 1 (native-child) halted, all CPUs confirmed parked')
     if confirm < positions[3] or confirm >= positions[4]:
         errors.append('no native all-CPU parked confirmation before settlement')
-    if halt not in ('requested', 'force', 'poweroff', 'reboot'):
+    if halt not in ('requested', 'force', 'force-retain', 'poweroff', 'reboot'):
         errors.append('unsupported halt lane')
     if events['HALTED'].get('mode', 'requested') != halt:
         errors.append('halt lane mismatch')
-    if halt == 'force':
+    if halt in ('force', 'force-retain'):
         nmi = trace.find('Sent NMI to 2 CPUs in instance 1')
         if nmi < positions[3] or nmi >= confirm:
             errors.append('no force-stop NMI to both assigned CPUs before settlement')
+    if halt == 'force-retain':
+        retained = list(re.finditer(r'^MK_X86_RETAINED (.*)$', trace, re.M))
+        cleared = list(re.finditer(r'^MK_X86_CONFIRM_FAULT_CLEAR (.*)$', trace, re.M))
+        try:
+            if len(retained) != 1 or len(cleared) != 1:
+                raise ValueError('missing retention or recovery event')
+            event = json.loads(retained[0][1])
+            before, after = event['allocations_before'], event['allocations_after']
+            cpu = event['fault_cpu']
+            pointers = ('image', 'ring', 'ring_phys', 'control', 'context', 'pool')
+            if (event.get('status') != 'active' or event.get('owned_cpus') != groups[1]
+                    or event.get('unload_errno') != 16 or event.get('destroy_errno') != 16
+                    or cpu not in groups[1] or before != after
+                    or before.get('state') != 3 or before.get('pool_size') != 536870912
+                    or any(not int(before[key], 16) for key in pointers)):
+                errors.append('failed confirmation did not retain ownership/allocations or refuse reclaim')
+            injection = trace.find(f'MK_X86_TEST_CONFIRM_FAIL phys={cpu}')
+            if (not positions[3] < injection < retained[0].start() < cleared[0].start() < confirm
+                    or json.loads(cleared[0][1]).get('cpu') != cpu):
+                errors.append('missing actual fault injection followed by bounded recovery')
+        except (KeyError, ValueError, TypeError, AttributeError):
+            errors.append('invalid retention evidence')
     if halt in ('poweroff', 'reboot'):
         requests = list(re.finditer(r'^MK_X86_TERMINATION_REQUEST (.*)$', trace, re.M))
         try:
@@ -92,7 +114,7 @@ def verify(trace, halt='requested'):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('trace', type=Path)
-    parser.add_argument('--halt', choices=('requested', 'force', 'poweroff', 'reboot'),
+    parser.add_argument('--halt', choices=('requested', 'force', 'force-retain', 'poweroff', 'reboot'),
                         default='requested')
     args = parser.parse_args()
     errors = verify(args.trace.read_text(errors='replace'), halt=args.halt)

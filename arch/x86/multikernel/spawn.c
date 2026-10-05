@@ -599,6 +599,11 @@ int mk_arch_confirm_parked(struct mk_instance *instance, mk_phys_cpu_t phys_cpu)
 	struct mk_spawn_context *ctx = instance->arch.spawn_ctx;
 	int ret;
 
+#ifdef CONFIG_MK_X86_NATIVE_CONFIRM_TEST
+	if (mk_x86_native_confirm_failure(phys_cpu))
+		return -ETIMEDOUT;
+#endif
+
 	if (!mk_pool || !mk_pool->arch.slot)
 		return -ENODEV;
 
