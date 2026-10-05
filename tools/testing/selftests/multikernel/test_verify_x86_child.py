@@ -35,7 +35,8 @@ class X86ChildGate(unittest.TestCase):
                   release='7.0.0-mk3-test'),
             event('PING', nonce='1234567890abcdef'),
             event('CHILD_REPLY', nonce='1234567890abcdef'),
-            'Instance 1 (native-child) halted, all CPUs confirmed parked\n',
+            ('Instance 1 (native-child) halted, all CPUs confirmed parked\n' +
+             event('CHILD_CAPTURED', nonce='1234567890abcdef', pending_bytes=0)),
             event('HALTED', mode='requested', status='loaded', assigned_cpus=[2, 3]),
             event('UNLOADED', status='ready', assigned_cpus=[2, 3]),
             event('HOST_SURVIVED', online='0-1', boot_id='62c2429a-bf11-48d8-b06f-7442b072e625'),
@@ -84,6 +85,14 @@ class X86ChildGate(unittest.TestCase):
                         'watchdog: BUG: soft lockup\n'):
             with self.subTest(failure=failure):
                 self.assertTrue(self.verify(''.join(self.trace()) + failure))
+
+    def test_child_capture_after_stop_is_mandatory(self):
+        trace = ''.join(self.trace())
+        lines = trace.splitlines(keepends=True)
+        capture = next(line for line in lines if line.startswith('MK_X86_CHILD_CAPTURED '))
+        for bad in (trace.replace(capture, ''), trace.replace(capture, '') + capture,
+                    trace.replace('"pending_bytes": 0', '"pending_bytes": 7')):
+            self.assertTrue(self.verify(bad))
 
     def test_requested_halt_cannot_qualify_force_halt(self):
         self.assertTrue(self.verify(''.join(self.trace()), halt='force'))

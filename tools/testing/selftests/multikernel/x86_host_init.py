@@ -15,6 +15,7 @@ import secrets
 import select
 import subprocess
 import sys
+import termios
 import time
 
 BASE = Path('/sys/fs/multikernel')
@@ -35,6 +36,42 @@ def require_qemu(identity=Path('/sys/class/dmi/id')):
 
 def marker(name, **fields):
     print('MK_X86_' + name + ' ' + json.dumps(fields, sort_keys=True), flush=True)
+
+
+def capture_tail(fd, pending, *, seconds=1):
+    """Bounded console drain; callers must confirm stop before treating it as final."""
+    deadline = time.monotonic() + seconds
+    captured = 0
+    while time.monotonic() < deadline:
+        if not select.select([fd], [], [], min(0.1, max(0, deadline - time.monotonic())))[0]:
+            continue
+        try:
+            chunk = os.read(fd, 8192)
+        except BlockingIOError:
+            continue
+        if not chunk:
+            break
+        captured += len(chunk)
+        pending.extend(chunk)
+        while b'\n' in pending:
+            line, _, pending = pending.partition(b'\n')
+            text = line.decode(errors='replace').rstrip('\r')
+            print(text, flush=True)
+            if text.startswith('MK_X86_FAIL '):
+                raise RuntimeError('child reported failure; reclamation prohibited')
+        if captured > 1024 * 1024:
+            raise RuntimeError('child diagnostic flood; qualification aborted')
+    return pending
+
+
+def capture_stopped_child(fd, pending, nonce, *, seconds=1):
+    pending = capture_tail(fd, pending, seconds=seconds)
+    if pending:
+        print(pending.decode(errors='replace'), flush=True)
+        raise RuntimeError('incomplete child diagnostic at confirmed halt')
+    marker('CHILD_CAPTURED', nonce=nonce, pending_bytes=0)
+    if os.isatty(1):
+        termios.tcdrain(1)
 
 
 def mount(source, target, kind):
@@ -214,8 +251,9 @@ def workload():
             while (BASE / 'instances' / NAME / 'status').read_text().strip() != 'loaded':
                 if time.monotonic() >= deadline:
                     raise RuntimeError('voluntary halt did not settle')
-                if select.select([fd], [], [], 0.1)[0]:
-                    print(os.read(fd, 8192).decode(errors='replace'), end='', flush=True)
+                pending = capture_tail(fd, pending, seconds=0.1)
+        status('loaded')  # confirmation must precede final console drain
+        capture_stopped_child(fd, pending, nonce)
         marker('HALTED', mode=halt, status=status('loaded'), assigned_cpus=ownership())
         cli('unload', NAME)
         marker('UNLOADED', status=status('ready'), assigned_cpus=ownership())

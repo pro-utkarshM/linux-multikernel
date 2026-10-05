@@ -13,41 +13,10 @@ import sys
 import time
 
 sys.path.insert(0, '/usr/lib/python3/dist-packages')
-from x86_host_init import BASE, NAME, cli, marker, mount, ownership, require_qemu, status
+from x86_host_init import BASE, NAME, cli, marker, mount, ownership, require_qemu, status, capture_tail
 
 # Terminal registry tests explicitly retain the child and discard the VM.
 TERMINAL_CAPTURE = object()
-
-
-def capture_tail(fd, pending):
-    """Bounded console capture before and after confirmed stop, before unload.
-
-    This is evidence capture, not an IRQ/callback retirement assertion. The
-    child can still print after its retirement marker; stop confirmation must
-    precede the final drain so those diagnostics cannot be hidden by PASS.
-    """
-    deadline = time.monotonic() + 1
-    captured = 0
-    while time.monotonic() < deadline:
-        if not select.select([fd], [], [], 0.1)[0]:
-            continue
-        try:
-            chunk = os.read(fd, 8192)
-        except BlockingIOError:
-            continue
-        if not chunk:
-            break
-        captured += len(chunk)
-        pending.extend(chunk)
-        while b'\n' in pending:
-            line, _, pending = pending.partition(b'\n')
-            text = line.decode(errors='replace').rstrip('\r')
-            print(text, flush=True)
-            if text.startswith('MK_X86_FAIL '):
-                raise RuntimeError('nested child reported failure; reclamation prohibited')
-        if captured > 1024 * 1024:
-            raise RuntimeError('child diagnostic flood; qualification aborted')
-    return pending
 
 
 def workload(after_nested=None, *, profile='nested', after_halt=None, after_unload=None):

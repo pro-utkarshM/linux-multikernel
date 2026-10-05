@@ -53,6 +53,11 @@ Run both test_verify_x86_child.py and test_x86_provenance.py unit suites.
 Hash evidence separately after copying it; the original input bundle manifest
 does not attest output logs added after launch.
 
+The halt driver drains the child console after stop confirmation and before
+unload. A partial last record or child FAIL prevents success. The verifier
+requires the nonce-correlated CHILD_CAPTURED boundary and rejects kernel
+warnings, BUG/Oops, lockups and RCU-stall diagnostics even with PASS markers.
+
 This boot slice requires six distinct physical IDs resolved from /proc/cpuinfo:
 two host CPUs, two assigned child CPUs and two spare pool CPUs. The host gives
 the child 512 MiB, loads the real ELF Image plus child initrd, and requires both

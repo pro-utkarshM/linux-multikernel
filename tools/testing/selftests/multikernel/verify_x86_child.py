@@ -77,6 +77,16 @@ def verify(trace, halt='requested', expected_revision=None):
     confirm = trace.find('Instance 1 (native-child) halted, all CPUs confirmed parked')
     if confirm < positions[3] or confirm >= positions[4]:
         errors.append('no native all-CPU parked confirmation before settlement')
+    captures = list(re.finditer(r'^MK_X86_CHILD_CAPTURED (.*)$', trace, re.M))
+    try:
+        if len(captures) != 1 or not confirm < captures[0].start() < positions[4]:
+            raise ValueError('missing final child capture after confirmation')
+        captured = json.loads(captures[0][1])
+        if (captured.get('nonce') != nonce or type(captured.get('pending_bytes')) is not int
+                or captured['pending_bytes'] != 0):
+            raise ValueError('incomplete or uncorrelated final child capture')
+    except (ValueError, TypeError) as error:
+        errors.append(str(error))
     if events['HALTED'].get('mode') != halt:
         errors.append('halt lane mismatch')
     nmis = list(re.finditer(r'Sent NMI to ([0-9]+) CPUs in instance 1\b', trace))
