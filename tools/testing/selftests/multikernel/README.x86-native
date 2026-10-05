@@ -1,0 +1,52 @@
+Executing-child extension of Nickolaev's #35 harness
+===================================================
+
+Pinned dependencies (preserve their authorship):
+  https://github.com/nickolaev/multikernel
+  48507f176520b11a655344510b1b865b037e527f
+  https://github.com/multikernel/kerf
+  38daa5687d6748846ffd003599a3bfba29785cd6
+
+The offline packer extends the earlier pre-spawn adapter's #35 newc/gzip
+packaging and Kerf runtime. It does not install anything, build dependencies or
+replace #35's general harness. Host prerequisites include Python, Click,
+libfdt/_libfdt, BusyBox at /usr/lib/initcpio/busybox, cpio, gzip and QEMU x86.
+It reports missing prerequisites instead of installing them. Run it only with
+clean dependency checkouts and a clean kernel source at the built revision.
+
+Build the same-source x86 GCC vmlinux/bzImage with x86_child.config requirements.
+Do not overwrite historical build directories. Example (explicit paths):
+
+  python3 prepare_x86_child.py --prepare --revision "$revision" \
+    --source "$source" --kernel-build "$build" \
+    --harness "$nickolaev_harness" --kerf "$kerf" --output "$output_parent"
+
+Without --prepare this is read-only preflight. --prepare makes a fresh bundle
+under output_parent, copies the same Python runtime into two root filesystems,
+and freezes inputs and SHA256SUMS before launch. The child initrd has no kernel
+payload. The supplied output parent must already exist.
+
+Boot ONLY in a disposable VM, never on the machine running these tests:
+
+  timeout --kill-after=5s 240s qemu-system-x86_64 \
+    -machine q35 -accel tcg,thread=multi -cpu max -smp 6 -m 2048 \
+    -kernel "$bundle/bzImage" -initrd "$bundle/host-initrd.cpio.gz" \
+    -append 'console=ttyS0,115200 rdinit=/init panic=0 kernelcore=1G log_buf_len=4M mk_test=x86-host' \
+    -nographic -monitor none -nic none -no-reboot
+
+Capture the complete command, QEMU version, raw serial output and actual timeout
+exit code. Both VM exit and verifier must succeed; do not let tee hide failures.
+Run `python3 verify_x86_child.py SERIAL_LOG` and the Python verifier unit suite.
+Hash evidence separately after copying it; the original input bundle manifest
+does not attest output logs added after launch.
+
+This boot slice requires six distinct physical IDs resolved from /proc/cpuinfo:
+two host CPUs, two assigned child CPUs and two spare pool CPUs. The host gives
+the child 512 MiB, loads the real ELF Image plus child initrd, and requires both
+assigned CPUs online, PID 1, a distinct boot identity and a nonce-matched reply
+over mktty. Requested halt must report all CPUs parked before LOADED; unload
+must leave the host alive and instance READY with retained CPU ownership.
+
+A PASS is ONLY executing-child boot, requested halt and unload under QEMU TCG.
+It is NOT incoming-worker/controller interleaving, IRQ/RCU callback retirement,
+failed confirmation, force halt, DMA, crash-kexec or physical-hardware proof.
