@@ -80,6 +80,18 @@ class Verification(unittest.TestCase):
     def test_complete_native_evidence(self):
         self.assertEqual(verify(complete_log(), 0, 'graceful', 1, 1)['result'], 'PASS')
 
+    def test_latest_stop_and_raw_child_identity_must_match(self):
+        text = complete_log()
+        row = next(line for line in text.splitlines(keepends=True)
+                   if line.startswith('MK_LIFECYCLE_STOPPED '))
+        stopped = json.loads(row.partition(' ')[2])
+        stopped['hsm_trace'].append('kerf: mk_hsm_status: hart=65537 state=3')
+        for invalid in (text.replace(row, event('STOPPED', **stopped)),
+                        text.replace('boot=child', 'boot=host'),
+                        text.replace('release=linux-test', 'release=wrong-linux')):
+            with self.subTest(invalid=invalid), self.assertRaises(ValueError):
+                verify(invalid, 0, 'graceful', 1, 1)
+
     def test_expected_panic_stack_requires_timeout_and_host_survival(self):
         text = complete_log().replace('graceful', 'panic')
         panic = 'MK_CHILD_ACTION mode=panic\nsysrq: Trigger a crash\nKernel panic - not syncing: sysrq\nCall Trace:\nRebooting in 1 seconds..\n'

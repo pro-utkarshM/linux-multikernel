@@ -118,3 +118,60 @@ their original frozen verifier and run the new cases on fresh artifacts.
 The focused manifest check runs with and without instrumentation and uses real
 libfdt for the small-buffer case. Verifier unit fixtures are not QEMU evidence.
 Native qualification requires fresh committed source and matching build artifacts.
+
+Physical-placement rejection (private test branch)
+--------------------------------------------------
+
+MODE=placement-negative requires HARTS=1|2, CYCLES=1, no alternate build and
+FAULT_MODE=0. Only this mode adds mk_test_bad_placement=1 to the host command
+line; the selector is default-off and is not passed to the child. It uses a
+valid, unmodified Image and initrd, with no HSM fault selector (mode0) and no
+manifest fault. Mode0 firmware may still contain the private test instrumentation.
+
+The private native hook must target host instance 0 loading multikernel
+instance 1, once, at the first successful allocation with buf_align==SZ_2M.
+Immediately before the existing alignment rejection it changes only the local
+physical address to original|PAGE_SIZE (4096), preserving the original virtual
+allocation pointer. Required raw printk records, in order, are:
+
+  MK_TEST_PLACEMENT id=1 original=0x... injected=0x... size=DEC align=0x200000
+  Multikernel allocation not aligned: phys=0x..., required=0x200000
+  MK_TEST_FREE id=1 kind=allocation phys=HEX size=DEC pool=HEX
+
+verify_placement.py requires exactly one injection of an originally 2MiB-aligned
+address, a 4096-byte displacement, matching rejection and exactly one free of
+the original address and size before retry. The injected address must never
+appear as a freed allocation. The valid load must return ENOMEM, leave READY,
+both ownership trees and the host boot ID unchanged, and show no copy/start.
+The guard log must occur in retained raw dmesg; JSON claims alone cannot pass.
+
+Retry loads the same payload, boots the child and completes a live ring
+roundtrip. Separately emitted raw trace windows must match the rejected and
+recovered JSON records. The recovery trace includes both load-time copies and
+exec-time copies: a trace_marker named MK_PLACEMENT_EXEC separates them. Loading
+must copy without starting; exec requires each hart's latest pre-copy status
+to be STOPPED and all exec copies to precede the first start. Normal graceful halt,
+STOPPED confirmation, unload and deletion follow. PLACEMENT_RELEASED reuses
+the manifest lane's healthy Image/control/ring/manifest/pool release proof,
+without claiming that a manifest fault ran. Raw loader/resource/free records
+must match the executing Image and the two distinct release windows.
+The shared lifecycle verifier now requires each hart's latest final observation
+to be STOPPED, and correlates raw child boot/release identities with their cycle
+records. Preserve historical bundles with their frozen verifiers; these stricter
+checks need new evidence, not retroactive relabeling of old runs.
+
+The runner freezes and hashes verify_placement.py with the other verifiers.
+It can also be invoked as:
+
+  python3 verify_placement.py SERIAL_LOG EXIT_STATUS HARTS
+
+Local verifier/recipe checks (no kernel build or VM):
+
+  python3 -B -m unittest discover -s tools/testing/selftests/multikernel -p 'test_*.py'
+  bash -n tools/testing/selftests/multikernel/qemu_lifecycle_test.sh
+
+test_verify_placement.py is a synthetic fixture with false-positive mutations,
+not evidence that the native hook, allocator or QEMU lifecycle ran. Native
+qualification still requires the private hook, matching fresh build artifacts
+and a retained QEMU bundle. This lane does not establish physical cache or
+firmware fault behavior.

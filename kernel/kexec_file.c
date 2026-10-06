@@ -31,6 +31,18 @@
 #include <linux/multikernel.h>
 #include "kexec_internal.h"
 
+#ifdef MK_NATIVE_TEST_KERNEL
+#include <linux/init.h>
+#include <linux/sizes.h>
+static bool mk_test_bad_placement;
+#include "../tools/testing/selftests/multikernel/native_placement_fault.h"
+static int __init mk_test_placement_setup(char *value)
+{
+	return !kstrtobool(value, &mk_test_bad_placement);
+}
+__setup("mk_test_bad_placement=", mk_test_placement_setup);
+#endif
+
 #ifdef CONFIG_KEXEC_SIG
 static bool sig_enforce = IS_ENABLED(CONFIG_KEXEC_SIG_FORCE);
 
@@ -921,6 +933,9 @@ static int kexec_alloc_multikernel(struct kexec_buf *kbuf)
 
 	/* Convert virtual address to physical */
 	phys_addr = virt_to_phys(virt_addr);
+#ifdef MK_NATIVE_TEST_KERNEL
+	phys_addr = mk_test_placement(kbuf, phys_addr);
+#endif
 
 	if (!IS_ALIGNED(phys_addr, kbuf->buf_align)) {
 		pr_info("Multikernel allocation not aligned: phys=0x%llx, required=0x%lx\n",

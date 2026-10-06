@@ -199,7 +199,8 @@ def main():
     assert mode in ('graceful', 'halt', 'poweroff', 'reboot', 'panic',
                     'deny-primary', 'partial-start', 'stuck-stop', 'loader-negative',
                     'failed-retain', 'lost-ack', 'writer-stress',
-                    'manifest-prepare', 'manifest-capacity')
+                    'manifest-prepare', 'manifest-capacity', 'placement-negative')
+    placement_negative = mode == 'placement-negative'
     manifest_fault = {'manifest-prepare': (1, errno.ENOMEM),
                       'manifest-capacity': (2, errno.ENOSPC)}.get(mode)
     assert harts in (1, 2) and 1 <= cycles <= 50
@@ -212,6 +213,11 @@ def main():
     if manifest_fault:
         assert cycles == 1 and images == 'same' and fault == 0
         assert 'mk_test_manifest_fault=' + str(manifest_fault[0]) in args
+    assert ('mk_test_bad_placement=1' in args) == placement_negative
+    if placement_negative:
+        assert cycles == 1 and images == 'same' and fault == 0
+        assert 'mk_test_manifest_fault=0' in args
+        assert 'mk_test_resource_trace=1' in args
     if mode in ('failed-retain', 'lost-ack'):
         assert harts == 2 and cycles == 1 and images == 'same'
         assert fault in ((8,) if mode == 'failed-retain' else (0, 7))
@@ -228,7 +234,7 @@ def main():
     (trace_dir / 'kprobe_events').write_text(
         'r:mk_hsm_status sbi_hsm_hart_get_status hart=$arg1:u64 state=$retval:s32\n')
     (trace_dir / 'events/kprobes/mk_hsm_status/enable').write_text('1\n')
-    if mode in ('stuck-stop', 'loader-negative', 'failed-retain', 'lost-ack') or manifest_fault:
+    if mode in ('stuck-stop', 'loader-negative', 'failed-retain', 'lost-ack') or manifest_fault or placement_negative:
         for command in ('p:mk_copy kimage_load_segment', 'p:mk_start sbi_hsm_hart_start'):
             register_probe(trace_dir, command)
         for event in ('mk_copy', 'mk_start'):
@@ -336,7 +342,7 @@ def main():
             subprocess.run(['/bin/busybox', 'dmesg'], check=True)
     seen_boots = set()
     image_start = None
-    if manifest_fault:
+    if manifest_fault or placement_negative:
         sys.path.insert(0, '/payload')
         from verify_retention import resources, release_control, loaded_extents
     for cycle in range(1, cycles + 1):
@@ -373,6 +379,32 @@ def main():
                 assert all((BASE / path).read_bytes() == data for path, data in ownership.items())
                 marker('LOAD_REJECTED', case=case, error=result, state='ready',
                        no_copy_or_start=True, ownership_unchanged=True)
+        if placement_negative:
+            assert status() == 'ready'
+            ownership = {path: (BASE / path).read_bytes() for path in
+                         ('device_tree', 'instances/lifecycle-test/device_tree')}
+            log_start = len(subprocess.check_output(['/bin/busybox', 'dmesg']))
+            trace.write_text('\n')
+            # Valid Image/initrd: only the native physical-placement hook faults.
+            with payload.open('rb') as kernel, open('/payload/secondary-initrd.cpio.gz', 'rb') as initrd:
+                result = require_errno(lambda: kexec_file_load(
+                    kernel.fileno(), initrd.fileno(),
+                    'rdinit=/init console=mktty0 panic=1 mk_lifecycle_child=1',
+                    KEXEC_MULTIKERNEL | KEXEC_MK_ID(1)), errno.ENOMEM)
+            evidence = trace.read_text()
+            guard_log = subprocess.check_output(['/bin/busybox', 'dmesg'])[log_start:].decode()
+            assert 'mk_copy:' not in evidence and 'mk_start:' not in evidence
+            assert (trace_dir / 'tracing_on').read_text().strip() == '1'
+            assert status() == 'ready'
+            assert all((BASE / path).read_bytes() == data for path, data in ownership.items())
+            assert Path('/proc/sys/kernel/random/boot_id').read_text().strip() == host_boot
+            print('MK_PLACEMENT_TRACE_BEGIN rejected\n' + '\n'.join(evidence.splitlines()) +
+                  '\nMK_PLACEMENT_TRACE_END rejected', flush=True)
+            marker('PLACEMENT_REJECTED', error=result, state='ready',
+                   ownership_unchanged=True, host_boot=host_boot,
+                   trace=evidence.splitlines(), guard_log=guard_log)
+            # One-shot fault consumed: retry the same unmodified payload.
+            trace.write_text('\n')
         with payload.open('rb') as kernel, open('/payload/secondary-initrd.cpio.gz', 'rb') as initrd:
             kexec_file_load(kernel.fileno(), initrd.fileno(),
                             'rdinit=/init console=mktty0 panic=1 mk_lifecycle_child=1',
@@ -446,6 +478,8 @@ def main():
                 marker('REJECTED', error=result, harts=ids, host_alive=True, cleanup='ready',
                        hsm_trace=[line for line in evidence.splitlines() if 'mk_hsm_status:' in line])
                 continue
+            if placement_negative:
+                (trace_dir / 'trace_marker').write_text('MK_PLACEMENT_EXEC\n')
             boot_multikernel(1)
             ready = read_until(rb'MK_CHILD_READY online=(\S+) present=(\S+) possible=(\S+) boot=(\S+) release=(\S+)\r?\n')
             mappings = {int(a): int(b, 16) for a, b in re.findall(rb'MK_CHILD_CPU logical=(\d+) reg=([0-9a-f]+)', received)}
@@ -480,6 +514,13 @@ def main():
                 evidence = trace.read_text()
                 assert 'mk_copy:' in evidence and 'mk_start:' in evidence
                 marker('MANIFEST_RECOVERED', trace=evidence.splitlines())
+            if placement_negative:
+                evidence = trace.read_text()
+                assert 'mk_copy:' in evidence and 'mk_start:' in evidence
+                assert (trace_dir / 'tracing_on').read_text().strip() == '1'
+                print('MK_PLACEMENT_TRACE_BEGIN recovered\n' + '\n'.join(evidence.splitlines()) +
+                      '\nMK_PLACEMENT_TRACE_END recovered', flush=True)
+                marker('PLACEMENT_RECOVERED', trace=evidence.splitlines())
             if mode == 'writer-stress':
                 force_error = require_errno(lambda: halt_multikernel(1, force=True), errno.EOPNOTSUPP)
                 assert status() == 'active'
@@ -530,7 +571,7 @@ def main():
                 marker('RECOVERED', boot=recovered[4].decode(), host_alive=True,
                        trace=trace.read_text().splitlines())
             trace.write_text('\n')
-            if mode in ('graceful', 'partial-start', 'stuck-stop', 'loader-negative', 'lost-ack', 'writer-stress') or manifest_fault:
+            if mode in ('graceful', 'partial-start', 'stuck-stop', 'loader-negative', 'lost-ack', 'writer-stress') or manifest_fault or placement_negative:
                 if mode == 'stuck-stop':
                     require_errno(lambda: halt_multikernel(1), errno.EBUSY)
                     assert status() == 'active'
@@ -580,7 +621,8 @@ def main():
             drain_console(fd, received)
             evidence = trace.read_text()
             for hart in ids:
-                assert re.search(r'hart=' + str(hart) + r' state=1\b', evidence), ('no stopped proof', hart)
+                states = re.findall(r'mk_hsm_status:.*\bhart=' + str(hart) + r' state=(-?\d+)\b', evidence)
+                assert states and states[-1] == '1', ('latest state is not STOPPED', hart, states)
             assert Path('/proc/sys/kernel/random/boot_id').read_text().strip() == host_boot
             assert Path('/proc/sys/kernel/tainted').read_text().strip() == '0'
             marker('STOPPED', cycle=cycle, harts=ids, host_alive=True,
@@ -588,7 +630,7 @@ def main():
         finally:
             if fd is not None:
                 os.close(fd)
-        if manifest_fault:
+        if manifest_fault or placement_negative:
             log = subprocess.check_output(['/bin/busybox', 'dmesg'])
             snapshots = resources(log.decode(), 'loaded')
             assert snapshots, 'missing live resource identity before cleanup'
@@ -601,7 +643,7 @@ def main():
     cli('init', '--cpus=none', '--memory=none', '--devices=none')
     assert Path('/sys/devices/system/cpu/online').read_text().strip() == '0-3'
     assert not list((BASE / 'instances').iterdir())
-    if manifest_fault:
+    if manifest_fault or placement_negative:
         deadline = time.monotonic() + 20
         while True:
             log = subprocess.check_output(['/bin/busybox', 'dmesg'])[release_start:].decode()
@@ -612,7 +654,7 @@ def main():
             except ValueError:
                 assert time.monotonic() < deadline, 'resource release incomplete'
                 time.sleep(0.05)
-        marker('MANIFEST_RELEASED', **released)
+        marker('PLACEMENT_RELEASED' if placement_negative else 'MANIFEST_RELEASED', **released)
     marker('PASS', mode=mode, cycles=cycles, host_alive=True)
     subprocess.run(['/bin/busybox', 'dmesg'], check=True)
 

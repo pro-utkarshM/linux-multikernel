@@ -27,6 +27,23 @@ boot or actual cache-coherence test is performed by these commands. They run
 from the source tree, not an installed kselftest bundle. CC and TMPDIR can be
 overridden; MK_SOURCE can select another compatible source tree.
 
+The private QEMU placement-negative recipe and raw-log contract are described
+in README.modern-integration. It rejects one deliberately misaligned physical
+placement of a valid Image, then requires normal load/boot/ring/halt/release
+recovery. The verifier-only check is:
+
+  python3 -B -m unittest discover -s tools/testing/selftests/multikernel -p 'test_verify_placement.py'
+
+These synthetic log fixtures test acceptance/rejection rules only; they are
+neither extracted allocator checks nor native QEMU execution evidence.
+The separate extracted allocator check runs both native-hook and plain variants:
+
+  bash tools/testing/selftests/multikernel/placement_test.sh
+
+It checks the actual kexec_alloc_multikernel body, with controlled allocation
+and address-conversion boundaries: reject bad alignment/bounds/overlap, free
+the original allocation once, leave the destination unpublished, and retry.
+
 Checks cover preparation before /chosen emission, a tree larger than PAGE_SIZE,
 property-before-child ordering, allocation/mapping errors, all-hart tracking
 before priming, failed-release retention, sparse hart IDs, HSM error translation,
