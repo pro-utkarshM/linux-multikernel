@@ -3,13 +3,44 @@
 #include <linux/cpu.h>
 #include <linux/init.h>
 #include <linux/kernel.h>
+#include <linux/kexec.h>
 #include <linux/multikernel.h>
+#include <linux/panic.h>
 #include <linux/smp.h>
+#include <linux/syscore_ops.h>
 #include <asm/sbi.h>
 
 static struct mk_instance *mk_parent_endpoint;
 static atomic_t mk_halt_notice = ATOMIC_INIT(0);
 static bool mk_receiver_ready;
+static bool mk_halt_quiesced;
+
+static void mk_riscv_shutdown_prepare(void *unused)
+{
+	/* Kexec uses syscore shutdown too, but later reopens CPU hotplug. */
+	if (panic_in_progress() || kexec_in_progress)
+		return;
+	if (system_state != SYSTEM_HALT && system_state != SYSTEM_POWER_OFF &&
+	    system_state != SYSTEM_RESTART)
+		return;
+	/*
+	 * Normal shutdown has drained native CPU hotplug before syscore.
+	 * Exclude local controllers and incoming resource mutations until stop.
+	 * A contended controller leaves the parent retaining this instance.
+	 */
+	if (!mutex_trylock(&mk_overlay_mutex))
+		return;
+	/* Pair with machine-stop's acquire before any ring publication. */
+	smp_store_release(&mk_halt_quiesced, true);
+}
+
+static const struct syscore_ops mk_riscv_syscore_ops = {
+	.shutdown = mk_riscv_shutdown_prepare,
+};
+
+static struct syscore mk_riscv_syscore = {
+	.ops = &mk_riscv_syscore_ops,
+};
 
 void mk_riscv_notify_parent_halted(void)
 {
@@ -27,6 +58,9 @@ void mk_riscv_notify_parent_halted(void)
 	unsigned long flags;
 	bool published = false;
 
+	/* Direct machine-stop and panic do not establish no-new-starts proof. */
+	if (!smp_load_acquire(&mk_halt_quiesced) || panic_in_progress())
+		return;
 	if (!parent || !mk_self || atomic_cmpxchg(&mk_halt_notice, 0, 1))
 		return;
 	local_irq_save(flags);
@@ -107,10 +141,12 @@ static int __init mk_riscv_doorbell_init(void)
 	if (state < 0)
 		return state;
 	if (host_instance) {
-		/* Publish the held reference before panic can use the endpoint. */
+		/* Publish the held reference before shutdown can use the endpoint. */
 		smp_store_release(&mk_parent_endpoint, mk_instance_get(host_instance));
 	}
 	WRITE_ONCE(mk_receiver_ready, true);
+	if (mk_spawned())
+		register_syscore(&mk_riscv_syscore);
 	return 0;
 }
 late_initcall(mk_riscv_doorbell_init);

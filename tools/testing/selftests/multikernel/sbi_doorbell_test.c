@@ -31,6 +31,16 @@ static struct mk_instance *mk_self = &self, *host_instance, *mk_parent_endpoint;
 #define CPUHP_TEARDOWN_CPU 200
 #define CPUHP_AP_ONLINE_DYN 250
 static int registered_state;
+/* This fixture is the host receiver; spawn qualification has its own test. */
+struct list_head { struct list_head *next, *prev; };
+struct syscore_ops;
+struct syscore { struct list_head node; const struct syscore_ops *ops; void *data; };
+static struct syscore mk_riscv_syscore;
+static bool mk_spawned(void) { return false; }
+static void register_syscore(struct syscore *entry)
+{
+	assert(!"host must not register shutdown qualification");
+}
 static struct mk_instance *mk_instance_get(struct mk_instance *p) { return p; }
 static int cpuhp_setup_state_nocalls(int state, const char *name,
 				   int (*up)(unsigned int), int (*down)(unsigned int))

@@ -7,6 +7,36 @@ AIA, general device assignment or ACPI synthesis. The parent endpoint is
 pinned locally; tests keep the top-level host running. Shared receive-ring
 reset does not cancel remote queued work or supply restart epochs (#7).
 
+Private voluntary shutdown qualification
+---------------------------------------
+
+The adapter only permits a successful HALTED notice after normal shutdown
+reaches its spawn-only syscore callback. The normal kernel halt/poweroff/reboot
+paths have already called cpu_hotplug_disable() there. The callback rejects
+panic and kexec, then trylocks the existing resource mutex and retains it until
+terminal stop. This excludes local controllers and incoming resource mutations;
+the parent must still confirm every assigned/tracked hart STOPPED. The resource
+mutex is not acquired with a blocking wait in this callback or in machine-stop.
+
+Direct machine-stop or emergency restart without prior qualification cannot
+publish this notice. Neither can observed panic (even after qualification),
+initialization failure or resource-lock contention.
+SYSTEM_RESTART alone is not proof: emergency_restart() sets it without the
+normal drain. Kexec also reaches syscore but later reopens CPU hotplug. Failure
+to qualify or send must not prevent local/secondary HART_STOP. The parent keeps
+ACTIVE ownership and allocations when settlement is unknown; direct execution
+cannot bypass this retention. Automatic panic/lost-ACK recovery is unfinished.
+
+panic_doorbell_test.sh executes the real registration, qualification and producer
+code with controlled kernel boundaries. shutdown_test.sh checks local-stop
+routing even when the notice helper returns; its counter measures attempts,
+not successful publication. Neither test proves native hotplug locking, later
+syscore callback ordering, live lockdep or firmware stop completion. Later
+syscore callbacks run while the resource mutex is retained, so a newly enabled
+callback with a conflicting dependency requires review and runtime qualification.
+Old panic/lost-ACK recipes expecting reusable settlement do not qualify this
+policy; explicit retention recipes and fresh runtime evidence are still required.
+
 The qemu-host-init.py/qemu-child-init recipes extend Nickolaev's #35 harness
 at 48507f176520b11a655344510b1b865b037e527f, with Kerf
 38daa5687d6748846ffd003599a3bfba29785cd6. Use that harness's unchanged

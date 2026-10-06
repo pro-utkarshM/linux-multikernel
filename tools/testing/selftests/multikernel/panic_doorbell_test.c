@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-2.0-only
-/* Real bounded panic producer: no allocation/lookup/blocking lock boundary. */
+/* Real shutdown qualification and bounded producer; kernel boundaries stubbed. */
 #include <assert.h>
 #include <errno.h>
 #include <stdbool.h>
@@ -21,6 +21,9 @@ typedef struct { unsigned int value; } atomic_t;
 #define SBI_EXT_IPI 0x735049
 #define SBI_EXT_IPI_SEND_IPI 0
 #define READ_ONCE(x) (x)
+#define WRITE_ONCE(x, v) ((x) = (v))
+#define __init
+#define CPUHP_AP_ONLINE_DYN 1
 #define smp_load_acquire(p) (*(p))
 #define smp_store_release(p, v) (*(p) = (v))
 #define __aligned(x) __attribute__((aligned(x)))
@@ -37,6 +40,46 @@ static struct mk_instance *mk_parent_endpoint;
 static atomic_t mk_halt_notice;
 static unsigned int sends, cas_calls;
 static bool irq_disabled;
+static bool mk_receiver_ready, mk_halt_quiesced, mk_overlay_mutex;
+static bool spawn, panicking, kexec_in_progress;
+static unsigned int overlay_attempts;
+static int cpuhp_result;
+static struct mk_instance *host_instance;
+enum system_states { SYSTEM_BOOTING, SYSTEM_RUNNING, SYSTEM_HALT,
+	SYSTEM_POWER_OFF, SYSTEM_RESTART };
+static enum system_states system_state;
+struct list_head { struct list_head *next, *prev; };
+struct syscore_ops {
+	int (*suspend)(void *data);
+	void (*resume)(void *data);
+	void (*shutdown)(void *data);
+};
+struct syscore { struct list_head node; const struct syscore_ops *ops; void *data; };
+static struct syscore *registered;
+static bool mk_spawned(void) { return spawn; }
+static bool panic_in_progress(void) { return panicking; }
+static struct mk_instance *mk_instance_get(struct mk_instance *instance) { return instance; }
+static void register_syscore(struct syscore *entry)
+{
+	assert(!registered);
+	registered = entry;
+}
+static int cpuhp_setup_state_nocalls(int state, const char *name,
+				   int (*online)(unsigned int),
+				   int (*offline)(unsigned int))
+{
+	assert(state == CPUHP_AP_ONLINE_DYN && name && !online && offline);
+	return cpuhp_result;
+}
+static bool mutex_trylock(bool *lock)
+{
+	assert(lock == &mk_overlay_mutex && !irq_disabled);
+	overlay_attempts++;
+	if (*lock)
+		return false;
+	*lock = true;
+	return true;
+}
 static unsigned int atomic_read(atomic_t *p) { return p->value; }
 static unsigned int atomic_read_acquire(atomic_t *p) { return p->value; }
 static unsigned int atomic_cmpxchg(atomic_t *p, unsigned int old, unsigned int new)
@@ -77,18 +120,95 @@ static void reset(void)
 {
 	memset(&ring, 0, sizeof(ring));
 	parent = (struct mk_instance) { .ipi_data = &ring, .ipi_target = 7 };
-	mk_parent_endpoint = &parent;
+	host_instance = &parent;
+	mk_parent_endpoint = NULL;
 	mk_halt_notice.value = 0;
 	sends = cas_calls = 0;
 	irq_disabled = false;
+	mk_receiver_ready = mk_halt_quiesced = mk_overlay_mutex = false;
+	spawn = true;
+	panicking = kexec_in_progress = false;
+	overlay_attempts = 0;
+	cpuhp_result = 0;
+	registered = NULL;
+	system_state = SYSTEM_HALT;
+}
+
+static void ready(void)
+{
+	reset();
+	assert(!mk_riscv_doorbell_init());
+}
+
+static void qualify(void)
+{
+	assert(registered && registered->ops->shutdown);
+	registered->ops->shutdown(registered->data);
+}
+
+static void expect_no_notice(void)
+{
+	mk_riscv_notify_parent_halted();
+	assert(!sends && !ring.ring.head.value && !mk_halt_notice.value && !cas_calls);
 }
 
 int main(void)
 {
 	struct mk_resource_ack ack;
 	struct mk_message *msg;
+	unsigned int i;
+	const enum system_states terminal[] = { SYSTEM_HALT, SYSTEM_POWER_OFF, SYSTEM_RESTART };
 
+	/* A direct/emergency machine-stop must not authorize reusable settlement. */
+	ready();
+	expect_no_notice();
+	system_state = SYSTEM_RESTART;
+	expect_no_notice();
+	for (i = 0; i < sizeof(terminal) / sizeof(*terminal); i++) {
+		ready();
+		system_state = terminal[i];
+		qualify();
+		assert(mk_overlay_mutex && overlay_attempts == 1);
+		mk_riscv_notify_parent_halted();
+		assert(sends == 1 && ring.ring.head.value == 1);
+	}
+	ready();
+	panicking = true;
+	qualify();
+	assert(!overlay_attempts && !mk_overlay_mutex);
+	expect_no_notice();
+	ready();
+	kexec_in_progress = true;
+	system_state = SYSTEM_RESTART;
+	qualify();
+	assert(!overlay_attempts && !mk_overlay_mutex);
+	expect_no_notice();
+	ready();
+	system_state = SYSTEM_RUNNING;
+	qualify();
+	assert(!overlay_attempts);
+	expect_no_notice();
+	ready();
+	mk_overlay_mutex = true;
+	qualify();
+	assert(overlay_attempts == 1 && mk_overlay_mutex);
+	expect_no_notice();
+	ready();
+	qualify();
+	panicking = true;
+	expect_no_notice();
+	assert(mk_overlay_mutex);
 	reset();
+	spawn = false;
+	assert(!mk_riscv_doorbell_init() && !registered);
+	expect_no_notice();
+	reset();
+	cpuhp_result = -EIO;
+	assert(mk_riscv_doorbell_init() == -EIO && !registered);
+	expect_no_notice();
+
+	ready();
+	qualify();
 	mk_riscv_notify_parent_halted();
 	assert(sends == 1 && ring.ring.head.value == 1);
 	msg = (void *)ring.ring.entries[0].buffer;
@@ -100,22 +220,26 @@ int main(void)
 	assert(ring.ring.entries[0].data_size == sizeof(*msg) + sizeof(ack));
 	mk_riscv_notify_parent_halted();
 	assert(sends == 1);
-	reset();
+	ready();
+	qualify();
 	parent.ipi_lock = true;
 	mk_riscv_notify_parent_halted();
 	assert(!sends && !ring.ring.head.value && parent.ipi_lock && !irq_disabled);
-	reset();
+	ready();
+	qualify();
 	ring.ring.head.value = 63;
 	mk_riscv_notify_parent_halted();
 	assert(!sends && ring.ring.head.value == 63 && !parent.ipi_lock);
-	reset();
+	ready();
+	qualify();
 	parent.ipi_data = NULL;
 	mk_riscv_notify_parent_halted();
 	assert(!sends && !parent.ipi_lock);
-	reset();
+	ready();
+	qualify();
 	mk_parent_endpoint = NULL;
 	mk_riscv_notify_parent_halted();
 	assert(!sends);
-	puts("PASS: one-shot nonblocking halt notice; full/retired/contended endpoints skipped");
+	puts("PASS: qualified normal shutdown only; panic/kexec/contention retain; bounded notice");
 	return 0;
 }
