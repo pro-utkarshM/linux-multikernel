@@ -257,3 +257,19 @@ Local checks are verifier fixtures and non-PID1 refusal checks, not runtime proo
 
 Both native modes remain unqualified until matching fresh artifacts are booted
 and their retained evidence passes verify_kexec.py.
+
+Purgatory relocation regression check
+------------------------------------
+
+The independent kernel repair is tested without importing it into this test
+branch. Pass its source checkout explicitly (a 64-bit build host is required):
+
+  bash tools/testing/selftests/multikernel/purgatory_reloc_test.sh KERNEL_SOURCE
+
+This compiles the selected kernel's actual relocation handler against a small
+ELF fixture. It checks interleaved/reordered HI/LO references, multiple low users,
+I/S immediates, addends, section-relative/absolute symbols, displacement limits,
+two-byte instruction alignment, rejected matches and surrounding bytes. Run
+against the unchanged baseline as a negative control. Optional CC/CFLAGS allow
+Clang ASan/UBSan coverage. These are host-side C checks, not a purgatory boot or
+ordinary/crash kexec PASS; the separate fresh-build QEMU gates remain required.
