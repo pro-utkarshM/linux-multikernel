@@ -10,7 +10,7 @@ import subprocess
 import uuid
 from x86_lockdep import REQUIRED_CONFIG, verify_boundaries
 
-HALT_MODES = ('requested', 'force', 'poweroff', 'reboot')
+HALT_MODES = ('requested', 'force', 'halt', 'poweroff', 'reboot')
 HALT_LANES = HALT_MODES + tuple(mode + '-retain' for mode in HALT_MODES)
 
 
@@ -152,7 +152,7 @@ def verify(trace, halt='requested', expected_revision=None):
                     errors.append('invalid worker failed-probe observation')
         except (KeyError, ValueError, TypeError, AttributeError):
             errors.append('invalid retention evidence')
-    if mode in ('poweroff', 'reboot'):
+    if mode in ('halt', 'poweroff', 'reboot'):
         requests = list(re.finditer(r'^MK_X86_TERMINATION_REQUEST (.*)$', trace, re.M))
         try:
             if (len(requests) != 1 or json.loads(requests[0][1]).get('mode') != mode

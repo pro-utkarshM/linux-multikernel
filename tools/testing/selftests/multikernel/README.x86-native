@@ -131,7 +131,7 @@ It is NOT incoming-worker/controller interleaving, IRQ/RCU callback retirement,
 failed confirmation, force halt, DMA, crash-kexec or physical-hardware proof.
 
 Additional bounded termination lanes use the same bundle. Add one of
-mk_x86_halt=force, mk_x86_halt=poweroff or mk_x86_halt=reboot to the HOST QEMU
+mk_x86_halt=force, mk_x86_halt=halt, mk_x86_halt=poweroff or mk_x86_halt=reboot to the HOST QEMU
 command line, and pass the matching --halt option to verify_x86_child.py. The
 force lane also requires the native report that NMIs went to both assigned
 CPUs before confirmation. Voluntary lanes send a mktty userspace command to
@@ -150,7 +150,7 @@ or proof that an arbitrary VM is disposable. Use only the documented local lane.
 Stop-confirmation failure lane (test branch only): build a separate kernel with
 CONFIG_MK_X86_NATIVE_CONFIRM_TEST=y; never add it to production. Append HOST
 mk_x86_halt=MODE-retain mk_native_confirm_test=1, where MODE is requested,
-force, poweroff or reboot, and verify with --halt=MODE-retain. The option
+force, halt, poweroff or reboot, and verify with --halt=MODE-retain. The option
 defaults off; without the explicit host boot
 parameter no debugfs interface is created and no confirmation is injected.
 The default-off build must have no mk_x86_native_confirm_failure symbol.
@@ -165,6 +165,53 @@ just an unchanged ACTIVE status that could be observed before the worker runs.
 After clearing the selector, a recovery force-halt must confirm all CPUs and
 permit unload. This models inability to prove stop, NOT a real CPU proven to
 be executing the Image, and does not qualify IRQ/RCU or bulk cleanup races.
+
+Shutdown-permission rejection (private test branch only)
+------------------------------------------------------
+These are separate from MODE-retain confirmation injection/recovery. Build
+CONFIG_MK_X86_NATIVE_CONFIRM_TEST=y, CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST=y and
+CONFIG_MAGIC_SYSRQ=y, alongside x86_child.config. Package the existing halt
+profile from a clean, build-provenance-bound source commit. Ordinary
+mk_x86_halt=halt is the successful HALT control (the existing halt verifier).
+
+For each rejection mode use a fresh disposable VM and the frozen runner:
+
+  python3 -B "$bundle/run_x86_shutdown.py" --bundle "$bundle" \
+    --revision "$revision" --mode=panic-retention --output "$evidence_parent"
+
+Repeat with --mode=contended-poweroff-retention. The runner preserves the exact
+command, QEMU version, serial/debug logs, actual exit status and verifier result
+in a fresh output directory. Replay using the frozen verifier:
+
+  python3 -B "$bundle/verify_x86_shutdown.py" --bundle "$bundle" \
+    --revision "$revision" --mode=panic-retention \
+    --debug "$run/debug.log" "$run/serial.log"
+
+The child uses sysrq only for the deliberate panic. Contended poweroff holds the
+real mk_overlay_mutex at the existing controller checkpoint, bounded to 30s.
+Syscore's actual failed trylock is observed, not fabricated. The final decision
+passed to mk_halt_to_pool is written to QEMU port0xe9 using bounded stores and a
+trylock-only snapshot; it uses no printk, ring/TTY lock, allocation or wait.
+Only the opt-in q35 child instance1 with a nonce emits it. Missing/duplicate
+records, snapshot lock contention, event overflow, released/expired gates or a
+granted permit invalidate coverage. The runner forwards the actual debug-port
+record to host stdin; the host does not proceed based merely on unchanged ACTIVE.
+
+Before execution/unload/destruction refusal checks, the host closes its MKTTY
+reference. The uninjected confirmation selector/counter, assigned CPU set and
+Image/ring/control/context/pool identities must remain unchanged and ACTIVE.
+There is no forced recovery, HALTED publication or reclamation in these modes;
+the final host poweroff ends the disposable VM with resources still retained.
+The verifier binds the host acknowledgment to the raw debug record and nonce.
+Child panic is allowed only within its deliberate termination interval; other
+kernel faults, host panic and forced settlement fail the test. Lockdep samples
+remain boundary observations, not a post-panic query or proof of CPU parking.
+
+Run test_verify_x86_shutdown.py, terminal_observer_test.sh and
+voluntary_shutdown_test.sh (both normally and with
+CFLAGS=-DCONFIG_MK_X86_NATIVE_CONCURRENCY_TEST). These fixtures prove verifier
+and hook behavior, not native QEMU results. All new kernel observations stay
+private and must be excluded from production submission ranges.
 
 Ordinary child CPU re-online diagnostic: use the existing six-CPU halt profile
 with HOST mk_x86_reonline=1 and QEMU -debugcon file:/absolute/fresh/debug.log.

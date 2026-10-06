@@ -2,6 +2,9 @@
 /* Bounded process-only gates; not production code or IRQ/RCU qualification. */
 #include <linux/debugfs.h>
 #include <linux/interrupt.h>
+#include <linux/init.h>
+#include <linux/ktime.h>
+#include <linux/io.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/multikernel.h>
@@ -24,9 +27,55 @@ static struct native_event events[128];
 static u64 sequence, gate_cpu;
 static unsigned int event_count, armed, active_point, gate_seconds;
 static bool gate_active, gate_released, overflow;
+static u64 gate_deadline_ns, terminal_nonce;
+static bool shutdown_busy;
 /* Task-only observation pin, retained in this disposable one-shot VM. */
 static struct task_struct *drain_task;
 static bool drain_waiting;
+
+static int __init terminal_nonce_setup(char *value)
+{
+	if (kstrtoull(value, 16, &terminal_nonce))
+		terminal_nonce = 0;
+	return 1;
+}
+__setup("mk_x86_terminal_nonce=", terminal_nonce_setup);
+
+void mk_native_shutdown_busy(void)
+{
+	WRITE_ONCE(shutdown_busy, true);
+}
+
+void mk_native_shutdown_observe(bool notify, bool panic, bool kexec)
+{
+	char line[320];
+	unsigned long flags;
+	unsigned int point = 0;
+	bool observed = false, active = false, valid = false, lost = true;
+	int length, i;
+
+	if (!READ_ONCE(available) || !terminal_nonce || !mk_self || mk_self->id != 1)
+		return;
+	/* A panic may have stopped event_lock's owner: never wait for it. */
+	if (raw_spin_trylock_irqsave(&event_lock, flags)) {
+		observed = true;
+		active = gate_active;
+		point = active_point;
+		lost = overflow;
+		valid = active && !gate_released &&
+			ktime_get_mono_fast_ns() < gate_deadline_ns;
+		raw_spin_unlock_irqrestore(&event_lock, flags);
+	}
+	length = scnprintf(line, sizeof(line),
+		"MK_X86_SHUTDOWN {\"nonce\":\"%016llx\",\"instance\":1,"
+		"\"notify\":%u,\"panic\":%u,\"kexec\":%u,\"observed\":%u,"
+		"\"busy\":%u,\"active\":%u,\"valid\":%u,\"overflow\":%u,\"point\":%u}\n",
+		terminal_nonce, notify, panic, kexec, observed,
+		READ_ONCE(shutdown_busy), active, valid, lost, point);
+	/* QEMU q35 opt-in only. No printk, TTY/ring locks, allocation or wait. */
+	for (i = 0; i < length; i++)
+		outb(line[i], 0xe9);
+}
 
 static void record_event(unsigned int point, u64 request, u64 cpu,
 			 int result, unsigned int operation)
@@ -65,6 +114,7 @@ void mk_native_checkpoint(unsigned int point, u64 request, u64 cpu,
 		gate_active = hold = true;
 		gate_released = false;
 		timeout = gate_seconds * HZ;
+		gate_deadline_ns = ktime_get_mono_fast_ns() + (u64)gate_seconds * NSEC_PER_SEC;
 	}
 	raw_spin_unlock_irqrestore(&event_lock, flags);
 	if (!hold)

@@ -19,11 +19,12 @@ import termios
 import time
 sys.path.insert(0, '/usr/lib/python3/dist-packages')
 from x86_lockdep import read_debug_locks, probe_child
+from x86_shutdown import MODES as REJECTION_MODES
 
 BASE = Path('/sys/fs/multikernel')
 NAME = 'native-child'
-HALT_MODES = ('requested', 'force', 'poweroff', 'reboot')
-HALT_LANES = HALT_MODES + tuple(mode + '-retain' for mode in HALT_MODES)
+HALT_MODES = ('requested', 'force', 'halt', 'poweroff', 'reboot')
+HALT_LANES = HALT_MODES + tuple(mode + '-retain' for mode in HALT_MODES) + REJECTION_MODES
 
 
 def require_qemu(identity=Path('/sys/class/dmi/id')):
@@ -109,11 +110,38 @@ def status(expected):
     return actual
 
 
+def rejected(operation):
+    try:
+        operation()
+    except OSError as error:
+        if error.errno != errno.EBUSY:
+            raise
+        return error.errno
+    raise RuntimeError('unsafe operation succeeded while resources must be retained')
+
+
+def destroy():
+    from kerf.dtc.overlay import OverlayGenerator
+    # Bypass only the userspace state refusal, not the kernel guard.
+    blob = bytes(OverlayGenerator().generate_removal_overlay(NAME))
+    transactions = set((BASE / 'overlays').glob('tx_*'))
+    fd = os.open(BASE / 'overlays' / 'new', os.O_WRONLY | os.O_CLOEXEC)
+    try:
+        assert os.write(fd, blob) == len(blob)
+    finally:
+        os.close(fd)
+    created = set((BASE / 'overlays').glob('tx_*')) - transactions
+    assert len(created) == 1, created
+    transaction = created.pop()
+    result = (transaction / 'status').read_text().strip()
+    assert result == 'failed', result
+    return int(transaction.name.removeprefix('tx_')), result
+
+
 def failed_retention(child, console, mode):
     from kerf.kill.main import halt_multikernel
     from kerf.unload.main import kexec_file_unload, KEXEC_FILE_UNLOAD
     from kerf.load.main import KEXEC_MULTIKERNEL, KEXEC_MK_ID
-    from kerf.dtc.overlay import OverlayGenerator
     fault = Path('/sys/kernel/debug/mk-native-confirm-test')
     if not (fault / 'fail_cpu').exists():
         raise RuntimeError('explicit test-only confirmation interface missing')
@@ -122,14 +150,6 @@ def failed_retention(child, console, mode):
     assert before['state'] == 3 and owned == child
     failures_before = int((fault / 'failures').read_text())
     (fault / 'fail_cpu').write_text(str(child[-1]) + '\n')
-
-    def rejected(operation):
-        try:
-            operation()
-        except OSError as error:
-            assert error.errno == errno.EBUSY, error
-            return error.errno
-        raise RuntimeError('unsafe operation succeeded after failed confirmation')
 
     marker('RETENTION_HALT_REQUEST', mode=mode)
     if mode in ('requested', 'force'):
@@ -152,25 +172,6 @@ def failed_retention(child, console, mode):
     status('active')
     unload_errno = rejected(lambda: kexec_file_unload(
         KEXEC_MULTIKERNEL | KEXEC_MK_ID(1) | KEXEC_FILE_UNLOAD))
-
-    def destroy():
-        # Bypass Kerf's userspace state refusal, not the kernel guard. This is
-        # the existing removal overlay, written to the actual kernel entry.
-        blob = bytes(OverlayGenerator().generate_removal_overlay(NAME))
-        transactions = set((BASE / 'overlays').glob('tx_*'))
-        fd = os.open(BASE / 'overlays' / 'new', os.O_WRONLY | os.O_CLOEXEC)
-        try:
-            assert os.write(fd, blob) == len(blob)
-        finally:
-            os.close(fd)
-        # The ABI accepts a failed transaction too. Identify our directory by
-        # the set difference (single writer here), never a latest-tx heuristic.
-        created = set((BASE / 'overlays').glob('tx_*')) - transactions
-        assert len(created) == 1, created
-        transaction = created.pop()
-        result = (transaction / 'status').read_text().strip()
-        assert result == 'failed', result
-        return int(transaction.name.removeprefix('tx_')), result
 
     destroy_transaction, destroy_status = destroy()
     after = json.loads((fault / 'snapshot').read_text())
@@ -209,6 +210,8 @@ def workload():
     nonce = secrets.token_hex(8)
     diagnostic = (f' mk_cpu_reonline_probe=1 mk_cpu_reonline_nonce={nonce}'
                   if options.get('mk_x86_reonline') == '1' else '')
+    if halt in REJECTION_MODES:
+        diagnostic += f' mk_native_concurrency_test=1 mk_x86_terminal_nonce={nonce}'
     cli('load', NAME, '--kernel=/payload/vmlinux',
         '--initrd=/payload/child-initrd.cpio.gz', '--console=mktty0',
         '--cmdline=rdinit=/init panic=0 loglevel=7 mk_test=x86-child' + diagnostic)
@@ -250,6 +253,11 @@ def workload():
             from x86_reonline import host_probe
             pending = host_probe(fd, pending, nonce, marker)
         pending = probe_child(fd, pending, nonce)
+        if halt in REJECTION_MODES:
+            from x86_shutdown import host_terminate
+            console, fd = fd, -1
+            host_terminate(console, pending, nonce, halt, child)
+            return
         if halt.endswith('-retain'):
             failed_retention(child, fd, halt.removesuffix('-retain'))
         elif halt == 'force':
@@ -276,7 +284,8 @@ def workload():
                boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip())
         marker('PASS', slice='executing-child-boot')
     finally:
-        os.close(fd)
+        if fd >= 0:
+            os.close(fd)
 
 
 def main():

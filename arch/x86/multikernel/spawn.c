@@ -58,6 +58,9 @@
 #include <asm/cpu_entry_area.h>
 #include <linux/objtool.h>
 #include <linux/annotate.h>
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+#include <asm/multikernel_test.h>
+#endif
 
 /*
  * Spawn context - combines boot_params with spawn-specific fields.
@@ -1908,8 +1911,12 @@ static void mk_halt_shutdown_prepare(void *unused)
 	 * Exclude local controllers and received resource mutations until park.
 	 * Never wait for a contended controller from this terminal path.
 	 */
-	if (!mutex_trylock(&mk_overlay_mutex))
+	if (!mutex_trylock(&mk_overlay_mutex)) {
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+		mk_native_shutdown_busy();
+#endif
 		return;
+	}
 	/* The machine-stop path acquires this permit before publishing HALTED. */
 	smp_store_release(&mk_halt_quiesced, true);
 }
@@ -1925,8 +1932,13 @@ static struct syscore mk_halt_syscore = {
 static void __noreturn mk_machine_halt(void)
 {
 	/* Pair with syscore's permit publication while it retains the mutex. */
-	mk_halt_to_pool(smp_load_acquire(&mk_halt_quiesced) &&
-			!panic_in_progress() && !kexec_in_progress);
+	bool notify = smp_load_acquire(&mk_halt_quiesced) &&
+		      !panic_in_progress() && !kexec_in_progress;
+
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	mk_native_shutdown_observe(notify, panic_in_progress(), kexec_in_progress);
+#endif
+	mk_halt_to_pool(notify);
 }
 
 static void __noreturn mk_machine_restart(char *cmd)

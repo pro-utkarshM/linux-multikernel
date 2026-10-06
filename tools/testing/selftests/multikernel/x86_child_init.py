@@ -88,9 +88,16 @@ def main():
         elif len(fields) == 2 and fields[0] == 'reonline':
             from x86_reonline import child_probe
             child_probe(fields[1], marker)
-        elif len(fields) == 2 and fields[0] == 'terminate' and fields[1] in ('poweroff', 'reboot'):
+        elif len(fields) == 2 and fields[0] == 'terminate' and fields[1].endswith('-retention'):
+            from x86_shutdown import child_terminate
+            try:
+                child_terminate(fields[1])
+            except Exception as error:
+                marker('FAIL', error=repr(error))
+        elif len(fields) == 2 and fields[0] == 'terminate' and fields[1] in ('halt', 'poweroff', 'reboot'):
             os.sync()
-            command = 0x4321FEDC if fields[1] == 'poweroff' else 0x01234567
+            command = {'halt': 0xCDEF0123, 'poweroff': 0x4321FEDC,
+                       'reboot': 0x01234567}[fields[1]]
             ctypes.CDLL(None).reboot(command)
             marker('FAIL', error='child termination returned')
         else:

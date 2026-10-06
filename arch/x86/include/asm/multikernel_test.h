@@ -27,6 +27,8 @@ struct kimage;
 struct work_struct;
 struct completion;
 void mk_native_gate_init(struct dentry *directory);
+void mk_native_shutdown_busy(void);
+void mk_native_shutdown_observe(bool notify, bool panic, bool kexec);
 void mk_native_controller_lock(struct mutex *lock, u64 request);
 void mk_native_drain_wait(bool waiting);
 void mk_native_rcu_init(struct dentry *directory);

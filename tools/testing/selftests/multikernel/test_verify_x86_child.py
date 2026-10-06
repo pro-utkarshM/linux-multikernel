@@ -110,7 +110,7 @@ class X86ChildGate(unittest.TestCase):
                                     halt='force'))
 
     def test_voluntary_halt_requires_the_matching_child_request(self):
-        for halt in ('poweroff', 'reboot'):
+        for halt in ('halt', 'poweroff', 'reboot'):
             trace = self.trace()
             trace[4] = ('MK_X86_TERMINATION_REQUEST ' + json.dumps({'mode': halt})
                         + '\n' + trace[4])

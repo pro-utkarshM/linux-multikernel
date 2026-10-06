@@ -23,6 +23,8 @@ sys.dont_write_bytecode = True
 HERE = Path(__file__).resolve().parent
 HARNESS_REV = '48507f176520b11a655344510b1b865b037e527f'
 KERF_REV = '38daa5687d6748846ffd003599a3bfba29785cd6'
+SHUTDOWN_FILES = ('x86_shutdown.py', 'verify_x86_shutdown.py', 'run_x86_shutdown.py',
+                  'x86_admission_child_init.py', 'x86_nested_child_init.py')
 
 
 def command(*args):
@@ -128,6 +130,7 @@ def main():
               HERE / 'x86_host_init.py', HERE / 'x86_child_init.py',
               HERE / 'verify_x86_child.py', HERE / 'x86_child.config',
               HERE / 'x86_lockdep.py', HERE / 'x86_reonline.py', Path(__file__).resolve()]
+    inputs += [HERE / name for name in SHUTDOWN_FILES]
     if args.profile != 'halt':
         inputs += [HERE / 'x86_nested_host_init.py', HERE / 'x86_nested_child_init.py',
                    HERE / 'verify_x86_nested.py']
@@ -191,8 +194,8 @@ def main():
     install(host_init, 'init')
     install(HERE / 'x86_lockdep.py', 'usr/lib/python3/dist-packages/x86_lockdep.py')
     install(HERE / 'x86_reonline.py', 'usr/lib/python3/dist-packages/x86_reonline.py')
-    if args.profile != 'halt':
-        install(HERE / 'x86_host_init.py', 'usr/lib/python3/dist-packages/x86_host_init.py')
+    for name in ('x86_host_init.py', 'verify_x86_child.py', *SHUTDOWN_FILES):
+        install(HERE / name, 'usr/lib/python3/dist-packages/' + name)
     if args.profile in ('admission', 'rcu', 'registry', 'tty', 'writer', 'destroy'):
         for name in ('x86_nested_host_init.py', 'x86_nested_child_init.py'):
             install(HERE / name, 'usr/lib/python3/dist-packages/' + name)
@@ -225,6 +228,8 @@ def main():
     install(bundle / 'child-initrd.cpio.gz', 'payload/child-initrd.cpio.gz')
     shutil.copy2(HERE / 'verify_x86_child.py', bundle / 'verify_x86_child.py')
     shutil.copy2(HERE / 'x86_lockdep.py', bundle / 'x86_lockdep.py')
+    for name in ('verify_x86_shutdown.py', 'run_x86_shutdown.py'):
+        shutil.copy2(HERE / name, bundle / name)
     if args.profile != 'halt':
         shutil.copy2(HERE / 'verify_x86_nested.py', bundle / 'verify_x86_nested.py')
     if args.profile == 'admission':
