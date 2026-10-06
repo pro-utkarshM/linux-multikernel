@@ -88,3 +88,33 @@ requires separate test-only native instrumentation, not invented ID-zero ABI.
 All executing cases also reject an active Image unload before termination.
 Lost-ACK testing remains pending. Do not count selector unit checks or a
 firmware build as a native fault test.
+
+Manifest failure modes (private test branch)
+-------------------------------------------
+
+MODE=manifest-prepare or manifest-capacity, HARTS=1|2, CYCLES=1 and
+FAULT_MODE=0 select a default-off, host-only, instance-1 one-shot kernel fault.
+The recipe passes mk_test_manifest_fault=1 or 2; other modes pass 0. Mode 1
+returns ENOMEM at the architecture preparation boundary (not a real allocator
+exhaustion test). Mode 2 lets preparation succeed, then limits the actual
+boot-tree emitter to 128 bytes to exercise ENOSPC. Production branches do not
+contain these selectors or their per-object MK_NATIVE_TEST_KERNEL build flag.
+
+Each run must observe all harts STOPPED before Image copies, exact manifest
+failure, no HART_START, unchanged ownership and no premature free. Copies are
+expected: generic execution copies the stopped Image before finalizing its tree.
+The recipe retries the same loaded Image without reloading; actual child boot,
+ring roundtrip and copy/start traces are positive controls. Normal halt, all-hart
+stop confirmation, unload and deletion follow. verify_manifest.py also requires
+correlated Image/control/ring/manifest/pool release markers after stopping.
+The Image free must match the loader's physical address and allocated size;
+an initrd free cannot substitute for it. Each hart's latest pre-copy status
+must be STOPPED in both the failure and retry windows, and retry starts must
+follow the last Image/initrd copy.
+The shared release verifier now requires image_extent in both retention CONTROL
+and manifest RELEASED records and correlates it with the raw loader log. Old
+logs lacking that field are not qualified by this stricter verifier; preserve
+their original frozen verifier and run the new cases on fresh artifacts.
+The focused manifest check runs with and without instrumentation and uses real
+libfdt for the small-buffer case. Verifier unit fixtures are not QEMU evidence.
+Native qualification requires fresh committed source and matching build artifacts.

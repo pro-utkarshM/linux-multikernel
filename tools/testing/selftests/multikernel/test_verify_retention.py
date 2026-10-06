@@ -22,7 +22,9 @@ def retention_log(mode='failed-retain', fault=8):
                '[ 1.4] MK_TEST_FREE id=1 kind=pool phys=0 size=268435456 pool=2000\n')
     text = 'OpenSBI v1.8.1\n' + event('BEGIN', mode=mode, fault=fault, harts=[65537, 7],
                                       cycles=1, images='same', host_boot='host')
-    text += event('CONTROL', resources=R, release_log=control, host_alive=True)
+    text += 'kexec_file(Image): Loaded kernel at 0xd0200000 bufsz=0x1000 memsz=0x1000\n'
+    text += event('CONTROL', resources=R, release_log=control, host_alive=True,
+                  image_extent=[0xd0200000, 4096])
     if mode == 'failed-retain':
         text += event('REJECTED', error=1, state='failed', tracer_exercised=True)
         text += 'MK_FW_REJECT mode=8 hart=65537 entry=0x88000000 error=-4\n'
@@ -113,6 +115,15 @@ class Retention(unittest.TestCase):
                               ('"guard_log": "', '"guard_log": "MK_TEST_FREE id=1 kind=pool\\n'),
                               ('transaction 3: -16', 'transaction 3: -5')):
             with self.assertRaises(ValueError): self.verify(text.replace(before, after))
+
+    def test_shared_release_control_requires_the_loaded_image_extent(self):
+        text = retention_log()
+        for before, after in (('phys=d0200000', 'phys=d0400000'),
+                              ('memsz=0x1000', 'memsz=0x2000'),
+                              ('"image_extent": [3491758080, 4096]', '"image_extent": []')):
+            self.assertIn(before, text)
+            with self.assertRaises(ValueError):
+                self.verify(text.replace(before, after))
 
     def test_ack_loss_requires_real_matching_successful_ack_and_timeout(self):
         text=retention_log('lost-ack', 7)

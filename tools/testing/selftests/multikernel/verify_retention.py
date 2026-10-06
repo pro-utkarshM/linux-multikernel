@@ -9,6 +9,12 @@ import sys
 FIELDS = ('image', 'ctrl', 'manifest', 'ring', 'pool', 'size', 'owned', 'ring_size', 'manifest_size')
 
 
+def loaded_extents(text):
+    return [(int(address, 16), int(size, 16)) for address, size in re.findall(
+        r'kexec_file\(Image\): Loaded kernel at (0x[0-9a-f]+) '
+        r'bufsz=0x[0-9a-f]+ memsz=(0x[0-9a-f]+)', text)]
+
+
 def resources(text, state=None, require_ctrl=True):
     result=[]
     for line in text.splitlines():
@@ -31,6 +37,10 @@ def resources(text, state=None, require_ctrl=True):
 def release_control(record):
     before=record.get('resources', {})
     log=record.get('release_log', '')
+    extent=record.get('image_extent')
+    if (not isinstance(extent, (list, tuple)) or len(extent)!=2 or
+        any(type(value) is not int or value<=0 for value in extent)):
+        raise ValueError('missing Image allocation extent')
     if (any(not isinstance(before.get(key), int) or before[key] <= 0 for key in FIELDS if key!='ctrl') or
         not isinstance(before.get('ctrl'),int) or before['ctrl']<0):
         raise ValueError('missing control allocation identity')
@@ -41,7 +51,8 @@ def release_control(record):
             ('allocation','ring','manifest','pool') for row in rows):
         raise ValueError('duplicate or unknown release identity')
     required=[('ring',before['ring'],before['ring_size']),
-              ('manifest',before['manifest'],before['manifest_size']),('pool',0,before['size'])]
+              ('manifest',before['manifest'],before['manifest_size']),('pool',0,before['size']),
+              ('allocation',extent[0],extent[1])]
     if before['ctrl']:
         required.append(('allocation',before['ctrl'],None))
     for kind,address,size in required:
@@ -53,9 +64,8 @@ def release_control(record):
     if any(row.get('kind')=='allocation' and (int(row.get('pool','-1'),16)!=before['pool'] or
             int(row.get('size','-1'))<=0 or int(row.get('phys','-1'),16)<=0) for row in rows):
         raise ValueError('uncorrelated allocation release')
-    if not any(row.get('kind')=='allocation' and int(row.get('phys', '-1'),16)!=before['ctrl']
-               for row in rows):
-        raise ValueError('Image release marker not exercised')
+    if extent[0]==before['ctrl']:
+        raise ValueError('control allocation cannot substitute for the Image')
 
 
 def verify_retention(text, exit_status, mode, fault):
@@ -86,6 +96,9 @@ def verify_retention(text, exit_status, mode, fault):
         begin.get('fault')!=fault or begin.get('cycles')!=1 or begin.get('images')!='same' or
         final.get('mode')!=mode or final.get('cycles')!=1 or final.get('host_alive') is not True):
         raise ValueError('scope or survival not established')
+    allocations=loaded_extents(raw)
+    if not allocations or tuple(data['CONTROL'].get('image_extent', []))!=allocations[0]:
+        raise ValueError('control Image extent does not match actual loader record')
     release_control(data['CONTROL'])
     if mode=='failed-retain':
         rejected=data['REJECTED']

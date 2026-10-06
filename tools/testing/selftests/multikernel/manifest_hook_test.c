@@ -3,6 +3,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <stdint.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <libfdt.h>
@@ -21,13 +22,19 @@ typedef uint64_t u64;
 #define mk_pool_park_slot() 0
 struct mk_shared_data { char ring[4096]; };
 struct mk_instance {
+	int id;
 	void *ipi_data;
 	phys_addr_t ipi_phys, manifest_phys;
 	u32 ipi_pages;
 };
 struct kimage { int mk_id; struct mk_instance *mk_instance; };
-static struct mk_instance host, target, *mk_self = &host;
+static struct mk_instance host, target = { .id = 1 }, *mk_self = &host;
 static int prepared, prepare_error, hook_error, hook_calls, refs;
+#ifdef MK_NATIVE_TEST_KERNEL
+static bool mk_overlay_mutex = true;
+#define lockdep_assert_held(lock) assert(*(lock))
+#include "native_manifest_fault.h"
+#endif
 
 static struct mk_instance *mk_instance_find(int id)
 {
@@ -84,10 +91,15 @@ static int mk_dt_emit_boot_tree(struct mk_instance *instance, void *fdt, size_t 
 	int ret;
 
 	assert(instance == &target);
-	assert(!fdt_create(fdt, size));
-	assert(!fdt_finish_reservemap(fdt));
-	assert(!fdt_begin_node(fdt, ""));
-	assert(!fdt_begin_node(fdt, "chosen"));
+	ret = fdt_create(fdt, size);
+	if (!ret)
+		ret = fdt_finish_reservemap(fdt);
+	if (!ret)
+		ret = fdt_begin_node(fdt, "");
+	if (!ret)
+		ret = fdt_begin_node(fdt, "chosen");
+	if (ret)
+		return ret;
 	ret = chosen(fdt, ctx);
 	if (ret)
 		return ret;
@@ -131,6 +143,28 @@ int main(void)
 	assert(mk_manifest_finalize(&image) == -ENOSPC && !refs);
 	hook_error = -EINVAL;
 	assert(mk_manifest_finalize(&image) == -EINVAL && !refs);
+#ifdef MK_NATIVE_TEST_KERNEL
+	hook_error = 0;
+	prepared = 0;
+	mk_test_manifest_mode = 1;
+	assert(mk_manifest_finalize(&image) == -ENOMEM);
+	assert(!prepared && !refs && !mk_test_manifest_mode);
+	assert(!mk_manifest_finalize(&image) && prepared && !refs);
+	mk_test_manifest_mode = 2;
+	assert(mk_manifest_finalize(&image) == -ENOSPC);
+	assert(prepared && !refs && !mk_test_manifest_mode);
+	assert(!mk_manifest_finalize(&image) && !refs);
+	/* Wrong target and spawn context must not consume the host's fault. */
+	mk_test_manifest_mode = 1;
+	target.id = 2;
+	assert(!mk_manifest_finalize(&image) && mk_test_manifest_mode == 1);
+	target.id = 1;
+	host.id = 1;
+	assert(!mk_manifest_finalize(&image) && mk_test_manifest_mode == 1);
+	host.id = 0;
+	assert(mk_manifest_finalize(&image) == -ENOMEM && !refs);
+	puts("PASS: default-off, host-only, target-scoped one-shot manifest faults");
+#endif
 	free(fdt);
 	puts("PASS: prepare/chosen ordering, multi-page tree, error propagation and references");
 	return 0;

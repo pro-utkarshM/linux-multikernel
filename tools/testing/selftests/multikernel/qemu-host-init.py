@@ -198,7 +198,10 @@ def main():
     fault = int(options.get('mk_lifecycle_fault', '0'))
     assert mode in ('graceful', 'halt', 'poweroff', 'reboot', 'panic',
                     'deny-primary', 'partial-start', 'stuck-stop', 'loader-negative',
-                    'failed-retain', 'lost-ack', 'writer-stress')
+                    'failed-retain', 'lost-ack', 'writer-stress',
+                    'manifest-prepare', 'manifest-capacity')
+    manifest_fault = {'manifest-prepare': (1, errno.ENOMEM),
+                      'manifest-capacity': (2, errno.ENOSPC)}.get(mode)
     assert harts in (1, 2) and 1 <= cycles <= 50
     assert images in ('same', 'alternate') and (images == 'same' or cycles >= 2)
     if mode in ('deny-primary', 'partial-start', 'stuck-stop'):
@@ -206,6 +209,9 @@ def main():
         assert fault in {'deny-primary': (1, 2, 3, 4), 'partial-start': (5,), 'stuck-stop': (7,)}[mode]
     if mode == 'loader-negative':
         assert cycles == 1 and images == 'same' and fault == 0
+    if manifest_fault:
+        assert cycles == 1 and images == 'same' and fault == 0
+        assert 'mk_test_manifest_fault=' + str(manifest_fault[0]) in args
     if mode in ('failed-retain', 'lost-ack'):
         assert harts == 2 and cycles == 1 and images == 'same'
         assert fault in ((8,) if mode == 'failed-retain' else (0, 7))
@@ -222,7 +228,7 @@ def main():
     (trace_dir / 'kprobe_events').write_text(
         'r:mk_hsm_status sbi_hsm_hart_get_status hart=$arg1:u64 state=$retval:s32\n')
     (trace_dir / 'events/kprobes/mk_hsm_status/enable').write_text('1\n')
-    if mode in ('stuck-stop', 'loader-negative', 'failed-retain', 'lost-ack'):
+    if mode in ('stuck-stop', 'loader-negative', 'failed-retain', 'lost-ack') or manifest_fault:
         for command in ('p:mk_copy kimage_load_segment', 'p:mk_start sbi_hsm_hart_start'):
             register_probe(trace_dir, command)
         for event in ('mk_copy', 'mk_start'):
@@ -250,7 +256,7 @@ def main():
     cli('create', 'lifecycle-test', '--id=1', '--cpus=' + ','.join(map(str, ids)), '--memory=256MB')
     if mode in ('failed-retain', 'lost-ack'):
         sys.path.insert(0, '/payload')
-        from verify_retention import resources, release_control
+        from verify_retention import resources, release_control, loaded_extents
 
         def dmesg():
             return subprocess.check_output(['/bin/busybox', 'dmesg']).decode()
@@ -267,13 +273,15 @@ def main():
                             KEXEC_MULTIKERNEL | KEXEC_MK_ID(1))
         # The control block is lazy: manifest finalization allocates it at exec.
         control_resources = snapshot('loaded', require_ctrl=False)
+        control_extent = loaded_extents(dmesg())[-1]
         control_start = len(dmesg())
         kexec_file_unload(KEXEC_MULTIKERNEL | KEXEC_MK_ID(1) | KEXEC_FILE_UNLOAD)
         assert status() == 'ready'
         cli('delete', 'lifecycle-test')
         deadline = time.monotonic() + 20
         while True:
-            control = dict(resources=control_resources, release_log=dmesg()[control_start:], host_alive=True)
+            control = dict(resources=control_resources, release_log=dmesg()[control_start:],
+                           image_extent=control_extent, host_alive=True)
             try:
                 release_control(control)
                 break
@@ -328,6 +336,9 @@ def main():
             subprocess.run(['/bin/busybox', 'dmesg'], check=True)
     seen_boots = set()
     image_start = None
+    if manifest_fault:
+        sys.path.insert(0, '/payload')
+        from verify_retention import resources, release_control, loaded_extents
     for cycle in range(1, cycles + 1):
         payload = Path('/payload/vmlinux-alt' if images == 'alternate' and cycle % 2 == 0
                        else '/payload/vmlinux')
@@ -373,6 +384,27 @@ def main():
         assert image_start is None or image_start == placement
         image_start = placement
         assert status() == 'loaded'
+        if manifest_fault:
+            ownership = {path: (BASE / path).read_bytes() for path in
+                         ('device_tree', 'instances/lifecycle-test/device_tree')}
+            log_start = len(subprocess.check_output(['/bin/busybox', 'dmesg']))
+            trace.write_text('\n')
+            result = require_errno(lambda: boot_multikernel(1), manifest_fault[1])
+            evidence = trace.read_text()
+            guard_log = subprocess.check_output(['/bin/busybox', 'dmesg'])[log_start:].decode()
+            assert 'mk_copy:' in evidence and 'mk_start:' not in evidence
+            assert 'MK_TEST_FREE id=1 ' not in guard_log
+            assert (trace_dir / 'tracing_on').read_text().strip() == '1'
+            assert status() == 'loaded'
+            assert all((BASE / path).read_bytes() == data for path, data in ownership.items())
+            assert Path('/proc/sys/kernel/random/boot_id').read_text().strip() == host_boot
+            for hart in ids:
+                assert re.search(r'hart=' + str(hart) + r' state=1\b', evidence)
+            marker('MANIFEST_REJECTED', error=result, state='loaded',
+                   ownership_unchanged=True, host_boot=host_boot,
+                   trace=evidence.splitlines(), guard_log=guard_log)
+            # One-shot fault is consumed: retry the same loaded Image, not a reload.
+            trace.write_text('\n')
         fd = connect_console(1)
         received = bytearray()
 
@@ -444,6 +476,10 @@ def main():
                    image_sha=image_sha, image_start=placement, active_unload_rejected=True)
             if mode == 'loader-negative':
                 marker('LOADER_RECOVERED', tracer_exercised=True)
+            if manifest_fault:
+                evidence = trace.read_text()
+                assert 'mk_copy:' in evidence and 'mk_start:' in evidence
+                marker('MANIFEST_RECOVERED', trace=evidence.splitlines())
             if mode == 'writer-stress':
                 force_error = require_errno(lambda: halt_multikernel(1, force=True), errno.EOPNOTSUPP)
                 assert status() == 'active'
@@ -494,7 +530,7 @@ def main():
                 marker('RECOVERED', boot=recovered[4].decode(), host_alive=True,
                        trace=trace.read_text().splitlines())
             trace.write_text('\n')
-            if mode in ('graceful', 'partial-start', 'stuck-stop', 'loader-negative', 'lost-ack', 'writer-stress'):
+            if mode in ('graceful', 'partial-start', 'stuck-stop', 'loader-negative', 'lost-ack', 'writer-stress') or manifest_fault:
                 if mode == 'stuck-stop':
                     require_errno(lambda: halt_multikernel(1), errno.EBUSY)
                     assert status() == 'active'
@@ -552,12 +588,31 @@ def main():
         finally:
             if fd is not None:
                 os.close(fd)
+        if manifest_fault:
+            log = subprocess.check_output(['/bin/busybox', 'dmesg'])
+            snapshots = resources(log.decode(), 'loaded')
+            assert snapshots, 'missing live resource identity before cleanup'
+            release_before = snapshots[-1]
+            release_extent = loaded_extents(log.decode())[-1]
+            release_start = len(log)
         kexec_file_unload(KEXEC_MULTIKERNEL | KEXEC_MK_ID(1) | KEXEC_FILE_UNLOAD)
         assert status() == 'ready'
     cli('delete', 'lifecycle-test')
     cli('init', '--cpus=none', '--memory=none', '--devices=none')
     assert Path('/sys/devices/system/cpu/online').read_text().strip() == '0-3'
     assert not list((BASE / 'instances').iterdir())
+    if manifest_fault:
+        deadline = time.monotonic() + 20
+        while True:
+            log = subprocess.check_output(['/bin/busybox', 'dmesg'])[release_start:].decode()
+            released = dict(resources=release_before, release_log=log, image_extent=release_extent)
+            try:
+                release_control(released)
+                break
+            except ValueError:
+                assert time.monotonic() < deadline, 'resource release incomplete'
+                time.sleep(0.05)
+        marker('MANIFEST_RELEASED', **released)
     marker('PASS', mode=mode, cycles=cycles, host_alive=True)
     subprocess.run(['/bin/busybox', 'dmesg'], check=True)
 

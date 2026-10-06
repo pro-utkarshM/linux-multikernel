@@ -9,6 +9,7 @@ obj-$(CONFIG_OF) += of_devices.o
 # Private validation branch only; never export with production series.
 CFLAGS_messaging.o += -DMK_NATIVE_TEST_KERNEL
 CFLAGS_core.o += -DMK_NATIVE_TEST_KERNEL
+CFLAGS_manifest.o += -DMK_NATIVE_TEST_KERNEL
 
 # DMA-BUF heap for multikernel memory allocation
 obj-$(CONFIG_DMABUF_HEAPS) += dma_heap.o

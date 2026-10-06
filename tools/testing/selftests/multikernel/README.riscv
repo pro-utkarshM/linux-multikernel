@@ -81,8 +81,10 @@ that follow-up the host is not automatically notified about a voluntary stop.
 No #7 dependency is introduced. Existing ring resets are not a proof that work
 on surviving peers has drained or that old replies cannot cross a re-spawn.
 
-The spawn panic notifier stops immediately, regardless of panic_timeout, with
-no parent notification. Crash shutdown is guarded as well because crash kexec
+With panic_timeout=0 the spawn panic notifier stops immediately. A nonzero
+timeout follows the generic panic restart policy, but the spawn restart override
+still uses local HART_STOP, never host-wide reset. There is no parent notification
+in these local paths. Crash shutdown is guarded as well because crash kexec
 can run before notifiers. Host panic policy remains unchanged. HART_STOP failure
 leaves the hart in a local wait loop: host confirmation must fail and retain its
 resources. Fresh QEMU/OpenSBI, x86 concurrency, failure-injection and 50-cycle
