@@ -37,6 +37,31 @@ callback with a conflicting dependency requires review and runtime qualification
 Old panic/lost-ACK recipes expecting reusable settlement do not qualify this
 policy; explicit retention recipes and fresh runtime evidence are still required.
 
+Rejected-execution observations (private, default-off)
+----------------------------------------------------
+
+With mk_test_resource_trace=1, host instance 0 records a resource snapshot for
+target instance 1 before returning EBUSY from ACTIVE execution. In this private
+RISC-V build only, it then issues one raw HART_STATUS query for each physical
+hart in the assigned/tracked union, including orphan tracking without duplicate
+queries. The existing resource mutex remains held; no tracking, ownership,
+allocation or lifecycle state is modified. There is no firmware polling loop.
+
+Each MK_TEST_HSM line carries id, phase=exec-rejected, a monotonic sample number,
+physical hart, state and raw SBI error. Nonzero error forces state=-1, never a
+stopped claim from an undefined firmware return value. Sample numbers are
+boot-local; the sequential statuses are not an atomic all-hart observation.
+State and confirmation
+snapshots outside exec-rejected do not add these queries. The per-object private
+build flag and runtime switch must not appear in the production series.
+
+These observations do not authorize reuse, cancel an outstanding operation or
+prove no future start. Retention recipes must bound their retries, require a
+complete fresh post-termination sample, correlate the frozen host/run identity,
+and treat errors or uncertainty as missing stop proof while retaining resources.
+The recipe/verifier work is still pending; neither old HSM traces nor a unit
+fixture PASS establishes native stopped/reclaimed memory safety.
+
 The qemu-host-init.py/qemu-child-init recipes extend Nickolaev's #35 harness
 at 48507f176520b11a655344510b1b865b037e527f, with Kerf
 38daa5687d6748846ffd003599a3bfba29785cd6. Use that harness's unchanged

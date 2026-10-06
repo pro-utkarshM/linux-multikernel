@@ -86,6 +86,7 @@ obj-$(CONFIG_CRASH_DUMP_KUNIT_TEST) += crash_core_test.o
 obj-$(CONFIG_KEXEC) += kexec.o
 obj-$(CONFIG_KEXEC_FILE) += kexec_file.o
 ifeq ($(CONFIG_RISCV)$(CONFIG_MULTIKERNEL),yy)
+CFLAGS_kexec_core.o += -DMK_NATIVE_TEST_KERNEL
 CFLAGS_kexec_file.o += -DMK_NATIVE_TEST_KERNEL
 endif
 obj-$(CONFIG_KEXEC_ELF) += kexec_elf.o

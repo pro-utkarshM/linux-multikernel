@@ -50,8 +50,10 @@ awk '/^int mk_overlay_rmdir\(/ { copy = 1 }
      copy && /^}/ { copy = 0 }' "$src/kernel/multikernel/overlay.c" \
      > "$build/image-overlay.h"
 
-${CC:-cc} ${CFLAGS:-} -std=gnu11 -pthread -Wall -Wextra -Werror \
+for hooks in '' '-DMK_NATIVE_TEST_KERNEL'; do
+${CC:-cc} ${CFLAGS:-} $hooks -std=gnu11 -pthread -Wall -Wextra -Werror \
     -Wno-unused-parameter -Wno-unused-but-set-variable -Wno-sign-compare \
     -I"$build" -I"$src/tools/include" "$test_dir/image_lock_test.c" \
     -o "$build/image_lock_test"
 timeout 45 "$build/image_lock_test"
+done

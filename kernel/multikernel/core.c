@@ -17,6 +17,9 @@
 #include <linux/rcupdate.h>
 #include "internal.h"
 #ifdef MK_NATIVE_TEST_KERNEL
+#ifdef CONFIG_RISCV
+#include <asm/sbi.h>
+#endif
 #include "../../tools/testing/selftests/multikernel/native_resource_fault.h"
 static int __init mk_test_resource_setup(char *value)
 {
