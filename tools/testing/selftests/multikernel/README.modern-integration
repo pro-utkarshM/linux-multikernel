@@ -175,3 +175,69 @@ not evidence that the native hook, allocator or QEMU lifecycle ran. Native
 qualification still requires the private hook, matching fresh build artifacts
 and a retained QEMU bundle. This lane does not establish physical cache or
 firmware fault behavior.
+
+Ordinary and crash file-kexec regression gates
+--------------------------------------------
+
+Run in two separate disposable QEMU VMs:
+
+  bash tools/testing/selftests/multikernel/qemu_kexec_test.sh \
+    KERNEL_BUILD HARNESS KERF_SOURCE RISCV_RUNTIME FIRMWARE OUTPUT_PARENT ordinary
+  bash tools/testing/selftests/multikernel/qemu_kexec_test.sh \
+    KERNEL_BUILD HARNESS KERF_SOURCE RISCV_RUNTIME FIRMWARE OUTPUT_PARENT crash
+
+These intentionally replace the primary kernel, unlike the spawn tests that
+require the parent to survive. No disk or network is attached. The helper never
+executes a host reboot: guest entrypoints refuse execution outside PID1, and
+the Python primary also checks RISC-V. Run them only via the QEMU recipe.
+
+Use the same #35/Kerf/runtime pins listed above and OpenSBI without an active
+fault selector. OUTPUT_PARENT must end in /build. The runner uses the unchanged
+#35 host/secondary initramfs packer in a new directory and keeps failed runs.
+Its source must be clean and match KERNEL_BUILD/source-revision.txt; it checks
+KERNEL_BUILD/build-artifacts.sha256 relative to the repository root. The exact
+selected Image/ELF/config entries must exist, and frozen copies must match those
+digests; a manifest covering another build or only config cannot pass. The
+original build manifest is retained in the bundle. These are
+build-time provenance records: never change a revision stamp to relabel an old
+Image. Rebuild the final source and retain its actual hashes before running.
+
+Both modes require RV64 KEXEC/KEXEC_FILE, CRASH_RESERVE/CRASH_DUMP, PROC_VMCORE
+and MAGIC_SYSRQ built in. They support MK-enabled and MK-disabled builds; neither
+creates a multikernel instance or uses the #27/#28 spawn adapters. Both boot with
+four harts and 2GiB. Ordinary uses reboot(KEXEC). Crash uses
+crashkernel=256M in the primary, checks the actual reservation, loads with
+KEXEC_FILE_ON_CRASH, and triggers SysRq-c. Both also set KEXEC_FILE_DEBUG (actual
+flags8/10) to record the final entry/type/flags. Purgatory remains enabled when
+configured: the recorded entry can differ from the raw Image base and is matched
+against machine_kexec's jump, not against the Image base.
+The capture kernel gets nr_cpus=1 and a small BusyBox initramfs. The primary's
+Python runtime is not in the capture
+initramfs. Legacy kexec_load is not covered.
+
+The frozen verifier requires one firmware boot, two kernel boots, correct load
+slot/flags, a matching final load/machine_kexec entry address, and ordered
+BEGIN/LOADED/HANDOFF/TARGET/PASS records. Each run has an externally checked nonce;
+the target must have a different boot ID, the expected release and CPU count.
+Crash requires exactly one intended primary SysRq panic, crashdump evidence,
+and an actual 64-byte read
+of /proc/vmcore with a bounded ELF64 little-endian RISC-V core header. This does
+not validate all dump contents or every captured register/page. Timeout, late
+failure, unexpected diagnostics, wrong identities and missing stages fail closed.
+Post-PASS kernel poweroff evidence is mandatory; reset diagnostics are rejected
+because -no-reboot can make a reset terminate QEMU with exit0 too.
+
+The bundle retains the source revision, Image/ELF/config/firmware hashes, both
+initramfs files, frozen guest/verifier sources, QEMU version, exact command,
+nonce, serial output, verifier output and both process exit statuses. A valid
+log without QEMU exit0 is
+not a pass. qemu_kexec_guest.py and qemu-kexec-target only run in the guest.
+
+Local checks are verifier fixtures and non-PID1 refusal checks, not runtime proof:
+
+  python3 -B -m unittest discover -s tools/testing/selftests/multikernel -p 'test_*.py'
+  bash -n tools/testing/selftests/multikernel/qemu_kexec_test.sh
+  sh -n tools/testing/selftests/multikernel/qemu-kexec-target
+
+Both native modes remain unqualified until matching fresh artifacts are booted
+and their retained evidence passes verify_kexec.py.
