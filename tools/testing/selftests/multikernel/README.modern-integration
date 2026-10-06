@@ -154,6 +154,7 @@ Use HARTS=2, CYCLES=1, no alternate Image and one of:
   MODE=lost-ack     FAULT_MODE=0  matching shutdown ACK dropped, observed STOPPED
   MODE=lost-ack     FAULT_MODE=7  ACK dropped, synthetic persistent STOP_PENDING
   MODE=panic-retain FAULT_MODE=0  child SysRq panic with panic=1, observed STOPPED
+  MODE=contended-retain FAULT_MODE=0  voluntary poweroff with actual mutex contention
   MODE=failed-retain FAULT_MODE=8 denied start, existing FAILED retention checks
 
 The launcher rejects the old MODE=panic rather than relabeling its historical
@@ -194,8 +195,38 @@ Even an all-STOPPED observation does not authorize ACTIVE reuse. No RECOVERED
 phase is accepted, resources remain until VM shutdown, and automatic panic or
 lost-ACK recovery remains unfinished. FAILED handling and the dedicated
 stuck-stop/pending-transition lanes remain separate. Unit tests check parsing,
-failure rejection and recipe boundaries only; fresh native runs, live lockdep
-and a contended voluntary-shutdown runtime case remain qualification gates.
+failure rejection and recipe boundaries only; fresh native runs and live lockdep
+remain qualification gates, including the contended voluntary-shutdown recipe.
+
+Contended voluntary shutdown (private test branch)
+-------------------------------------------------
+
+MODE=contended-retain uses two harts, one same-Image cycle and fault-0 firmware.
+Only the child receives mk_test_shutdown_contend=1. The private doorbell object
+includes native_shutdown_fault.h under MK_NATIVE_TEST_KERNEL; the selector is
+default-off and also requires a spawned instance with ID 1. Neither the host nor
+the healthy load/unload control enables it.
+
+At normal syscore shutdown a kernel thread acquires the actual overlay mutex,
+signals ownership, and holds it while the unmodified qualification trylock is
+attempted. The callback releases and waits for the holder after that attempt.
+Each completion wait is bounded at five seconds; thread creation, acquisition,
+release or timing failure emits MK_TEST_SHUTDOWN_FAIL and cannot qualify a run.
+Static completion storage outlives a delayed worker. This is a one-terminal-
+shutdown test hook, not a controller interface or a repeatable recovery API.
+
+The raw child action must be poweroff, followed by exactly one
+MK_TEST_SHUTDOWN_CONTENDED id=1 held=1 trylock=0 released=1 marker. Only an actual
+failed trylock with successful holder release emits it. The existing retention
+verifier then requires both assigned harts observed STOPPED, ACTIVE allocation
+retention, exec/unload/destroy refusal and host survival. It forbids panic, ACK
+loss, automatic reuse, copies/starts/frees and trace loss. The next healthy
+shutdown VM must run with the selector absent to retain the positive control.
+
+The hook creates real mutex contention, not a real resource mutation in flight;
+it does not qualify every controller race. Host-thread fixtures model kernel
+thread/completion boundaries; only a fresh QEMU run qualifies the native path.
+Keep this hook, adapter and their build flag out of the production patch series.
 
 Manifest failure modes (private test branch)
 -------------------------------------------

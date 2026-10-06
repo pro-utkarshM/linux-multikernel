@@ -9,6 +9,12 @@
 #include <linux/smp.h>
 #include <linux/syscore_ops.h>
 #include <asm/sbi.h>
+#ifdef MK_NATIVE_TEST_KERNEL
+#include <linux/completion.h>
+#include <linux/jiffies.h>
+#include <linux/kthread.h>
+#include "native_shutdown_fault.h"
+#endif
 
 static struct mk_instance *mk_parent_endpoint;
 static atomic_t mk_halt_notice = ATOMIC_INIT(0);
@@ -28,8 +34,19 @@ static void mk_riscv_shutdown_prepare(void *unused)
 	 * Exclude local controllers and incoming resource mutations until stop.
 	 * A contended controller leaves the parent retaining this instance.
 	 */
-	if (!mutex_trylock(&mk_overlay_mutex))
+#ifdef MK_NATIVE_TEST_KERNEL
+	if (!mk_test_shutdown_begin())
 		return;
+#endif
+	if (!mutex_trylock(&mk_overlay_mutex)) {
+#ifdef MK_NATIVE_TEST_KERNEL
+		mk_test_shutdown_end(true);
+#endif
+		return;
+	}
+#ifdef MK_NATIVE_TEST_KERNEL
+	mk_test_shutdown_end(false);
+#endif
 	/* Pair with machine-stop's acquire before any ring publication. */
 	smp_store_release(&mk_halt_quiesced, true);
 }

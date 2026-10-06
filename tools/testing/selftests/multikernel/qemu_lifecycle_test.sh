@@ -17,7 +17,7 @@ images=same
 test -z "$alternate_build" || images=alternate
 fault=${11:-0}
 case "$mode" in
-    graceful|halt|poweroff|reboot|panic-retain|deny-primary|partial-start|stuck-stop|\
+    graceful|halt|poweroff|reboot|panic-retain|contended-retain|deny-primary|partial-start|stuck-stop|\
     loader-negative|failed-retain|lost-ack|writer-stress|manifest-prepare|\
     manifest-capacity|placement-negative) ;;
     *) exit 2 ;;
@@ -26,9 +26,9 @@ esac
 case "$harts" in 1|2) ;; *) exit 2 ;; esac
 [[ "$cycles" =~ ^[1-9][0-9]?$ ]] && (( cycles <= 50 )) || exit 2
 case "$mode" in
-    lost-ack|panic-retain|failed-retain)
+    lost-ack|panic-retain|contended-retain|failed-retain)
         (( harts == 2 && cycles == 1 )) && test -z "$alternate_build" || exit 2
-        case "$mode:$fault" in lost-ack:0|lost-ack:7|panic-retain:0|failed-retain:8) ;; *) exit 2;; esac ;;
+        case "$mode:$fault" in lost-ack:0|lost-ack:7|panic-retain:0|contended-retain:0|failed-retain:8) ;; *) exit 2;; esac ;;
 esac
 manifest_fault=0
 case "$mode" in
@@ -124,7 +124,7 @@ timeout --kill-after=5s "$((300 + cycles * 60))s" "${command[@]}" > "$bundle/ser
 printf '%s\n' "$rc" > "$bundle/exit-status.txt"
 tail -30 "$bundle/serial.log"
 case "$mode" in
-    failed-retain|lost-ack|panic-retain)
+    failed-retain|lost-ack|panic-retain|contended-retain)
         python3 "$bundle/verify_retention.py" "$bundle/serial.log" "$rc" "$mode" "$fault" ;;
     loader-negative)
         python3 "$bundle/verify_loader.py" "$bundle/serial.log" "$rc" "$harts" ;;

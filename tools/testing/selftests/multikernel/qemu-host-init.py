@@ -213,7 +213,7 @@ def main():
     cycles = int(options.get('mk_lifecycle_cycles', '1'))
     images = options.get('mk_lifecycle_images', 'same')
     fault = int(options.get('mk_lifecycle_fault', '0'))
-    assert mode in ('graceful', 'halt', 'poweroff', 'reboot', 'panic-retain',
+    assert mode in ('graceful', 'halt', 'poweroff', 'reboot', 'panic-retain', 'contended-retain',
                     'deny-primary', 'partial-start', 'stuck-stop', 'loader-negative',
                     'failed-retain', 'lost-ack', 'writer-stress',
                     'manifest-prepare', 'manifest-capacity', 'placement-negative')
@@ -235,9 +235,9 @@ def main():
         assert cycles == 1 and images == 'same' and fault == 0
         assert 'mk_test_manifest_fault=0' in args
         assert 'mk_test_resource_trace=1' in args
-    if mode in ('failed-retain', 'lost-ack', 'panic-retain'):
+    if mode in ('failed-retain', 'lost-ack', 'panic-retain', 'contended-retain'):
         assert harts == 2 and cycles == 1 and images == 'same'
-        assert fault in {'failed-retain': (8,), 'lost-ack': (0, 7), 'panic-retain': (0,)}[mode]
+        assert fault in {'failed-retain': (8,), 'lost-ack': (0, 7), 'panic-retain': (0,), 'contended-retain': (0,)}[mode]
     if mode == 'writer-stress':
         assert harts == 2 and cycles == 1 and images == 'same' and fault == 0
     mount('sysfs', '/sys', 'sysfs')
@@ -251,7 +251,7 @@ def main():
     (trace_dir / 'kprobe_events').write_text(
         'r:mk_hsm_status sbi_hsm_hart_get_status hart=$arg1:u64 state=$retval:s32\n')
     (trace_dir / 'events/kprobes/mk_hsm_status/enable').write_text('1\n')
-    if mode in ('stuck-stop', 'loader-negative', 'failed-retain', 'lost-ack', 'panic-retain') or manifest_fault or placement_negative:
+    if mode in ('stuck-stop', 'loader-negative', 'failed-retain', 'lost-ack', 'panic-retain', 'contended-retain') or manifest_fault or placement_negative:
         for command in ('p:mk_copy kimage_load_segment', 'p:mk_start sbi_hsm_hart_start'):
             register_probe(trace_dir, command)
         for event in ('mk_copy', 'mk_start'):
@@ -277,7 +277,7 @@ def main():
     marker('BEGIN', mode=mode, harts=ids, cycles=cycles, host_boot=host_boot, images=images, fault=fault)
     cli('init', '--cpus=' + ','.join(map(str, ids)), '--memory=512MB', '--devices=none')
     cli('create', 'lifecycle-test', '--id=1', '--cpus=' + ','.join(map(str, ids)), '--memory=256MB')
-    if mode in ('failed-retain', 'lost-ack', 'panic-retain'):
+    if mode in ('failed-retain', 'lost-ack', 'panic-retain', 'contended-retain'):
         sys.path.insert(0, '/payload')
         from verify_retention import (resources, release_control, loaded_extents,
                                       retention_window, hsm_samples, retention_trace)
@@ -469,7 +469,8 @@ def main():
             trace.write_text('\n')
         with payload.open('rb') as kernel, open('/payload/secondary-initrd.cpio.gz', 'rb') as initrd:
             kexec_file_load(kernel.fileno(), initrd.fileno(),
-                            'rdinit=/init console=mktty0 panic=1 mk_lifecycle_child=1',
+                            'rdinit=/init console=mktty0 panic=1 mk_lifecycle_child=1' +
+                            (' mk_test_shutdown_contend=1' if mode == 'contended-retain' else ''),
                             KEXEC_MULTIKERNEL | KEXEC_MK_ID(1))
         placements = re.findall(rb'kexec_file\(Image\): Loaded kernel at (0x[0-9a-f]+)',
                                 subprocess.check_output(['/bin/busybox', 'dmesg']))
@@ -512,7 +513,7 @@ def main():
             raise AssertionError('child marker timed out')
 
         try:
-            if mode in ('failed-retain', 'lost-ack', 'panic-retain'):
+            if mode in ('failed-retain', 'lost-ack', 'panic-retain', 'contended-retain'):
                 trace.write_text('\n')
             if mode == 'failed-retain':
                 result = require_errno(lambda: boot_multikernel(1), errno.EPERM)
@@ -597,7 +598,7 @@ def main():
                 assert (BASE / 'instances/lifecycle-test/device_tree').read_bytes() == ownership
                 marker('STRESS', cycle=cycle, **result)
                 fd = connect_console(1)
-            if mode in ('lost-ack', 'panic-retain'):
+            if mode in ('lost-ack', 'panic-retain', 'contended-retain'):
                 positive_trace = trace.read_text()
                 # ACTIVE publication precedes architecture start/tracking.
                 # Use this only for allocation identity; the anchored post-
@@ -610,6 +611,14 @@ def main():
                 trace.write_text('\n')
                 (trace_dir / 'trace_marker').write_text(
                     f'MK_RETENTION_GUARD_BEGIN id=1 mode={mode} host_boot={host_boot}\n')
+            if mode == 'contended-retain':
+                os.write(fd, b'poweroff\n')
+                read_until(rb'MK_CHILD_ACTION mode=poweroff\r?\n')
+                read_until(rb'MK_TEST_SHUTDOWN_CONTENDED id=1 held=1 trylock=0 released=1\r?\n')
+                assert status() == 'active'
+                marker('CONTENDED', state='active', host_boot=host_boot, action='poweroff')
+                retain('active', before, positive_trace, ownership_before)
+                return
             if mode == 'panic-retain':
                 os.write(fd, b'panic\n')
                 read_until(rb'MK_CHILD_ACTION mode=panic\r?\n')

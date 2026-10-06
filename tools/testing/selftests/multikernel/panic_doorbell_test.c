@@ -7,6 +7,8 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <pthread.h>
+#include <time.h>
 
 typedef uint32_t u32;
 typedef uint64_t u64;
@@ -56,6 +58,7 @@ struct syscore_ops {
 };
 struct syscore { struct list_head node; const struct syscore_ops *ops; void *data; };
 static struct syscore *registered;
+static pthread_mutex_t mutex_guard = PTHREAD_MUTEX_INITIALIZER;
 static bool mk_spawned(void) { return spawn; }
 static bool panic_in_progress(void) { return panicking; }
 static struct mk_instance *mk_instance_get(struct mk_instance *instance) { return instance; }
@@ -74,12 +77,74 @@ static int cpuhp_setup_state_nocalls(int state, const char *name,
 static bool mutex_trylock(bool *lock)
 {
 	assert(lock == &mk_overlay_mutex && !irq_disabled);
+	pthread_mutex_lock(&mutex_guard);
 	overlay_attempts++;
-	if (*lock)
+	if (*lock) {
+		pthread_mutex_unlock(&mutex_guard);
 		return false;
+	}
 	*lock = true;
+	pthread_mutex_unlock(&mutex_guard);
 	return true;
 }
+static void mutex_unlock(bool *lock)
+{
+	pthread_mutex_lock(&mutex_guard);
+	assert(*lock);
+	*lock = false;
+	pthread_mutex_unlock(&mutex_guard);
+}
+#ifdef MK_NATIVE_TEST_KERNEL
+struct completion { pthread_mutex_t lock; pthread_cond_t wake; bool done; };
+#define DECLARE_COMPLETION(name) struct completion name = { PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER, false }
+#define HZ 1
+#define __setup(name, fn)
+#define IS_ERR(value) ((value) == NULL)
+static unsigned int contention_proofs, contention_failures;
+#define pr_info(...) (contention_proofs++)
+#define pr_err(...) (contention_failures++)
+static int kstrtobool(const char *value, bool *out)
+{
+	if (strcmp(value, "0") && strcmp(value, "1"))
+		return -EINVAL;
+	*out = !strcmp(value, "1");
+	return 0;
+}
+static void complete(struct completion *c)
+{
+	pthread_mutex_lock(&c->lock);
+	c->done = true;
+	pthread_cond_broadcast(&c->wake);
+	pthread_mutex_unlock(&c->lock);
+}
+static unsigned long wait_for_completion_timeout(struct completion *c, unsigned long timeout)
+{
+	struct timespec deadline;
+	bool done;
+	clock_gettime(CLOCK_REALTIME, &deadline);
+	deadline.tv_sec += timeout;
+	pthread_mutex_lock(&c->lock);
+	while (!c->done)
+		if (pthread_cond_timedwait(&c->wake, &c->lock, &deadline) == ETIMEDOUT)
+			break;
+	done = c->done;
+	pthread_mutex_unlock(&c->lock);
+	return done;
+}
+static bool fail_thread;
+static int (*thread_fn)(void *);
+static pthread_t holder;
+static void *run_holder(void *arg) { thread_fn(arg); return NULL; }
+static void *kthread_run(int (*fn)(void *), void *arg, const char *name)
+{
+	if (fail_thread)
+		return NULL;
+	thread_fn = fn;
+	assert(!pthread_create(&holder, NULL, run_holder, arg));
+	return &holder;
+}
+#include "native_shutdown_fault.h"
+#endif
 static unsigned int atomic_read(atomic_t *p) { return p->value; }
 static unsigned int atomic_read_acquire(atomic_t *p) { return p->value; }
 static unsigned int atomic_cmpxchg(atomic_t *p, unsigned int old, unsigned int new)
@@ -240,6 +305,32 @@ int main(void)
 	mk_parent_endpoint = NULL;
 	mk_riscv_notify_parent_halted();
 	assert(!sends);
+#ifdef MK_NATIVE_TEST_KERNEL
+	/* Default-off/host/wrong-instance gates must never create a holder. */
+	assert(mk_test_shutdown_setup("bad") == 0);
+	assert(mk_test_shutdown_setup("1") == 1);
+	ready();
+	spawn = false;
+	qualify();
+	assert(!contention_proofs && !contention_failures);
+	ready();
+	self.id = 2;
+	qualify();
+	assert(!contention_proofs && !contention_failures);
+	self.id = 1;
+	ready();
+	fail_thread = true;
+	qualify();
+	expect_no_notice();
+	assert(contention_failures == 1 && !mk_overlay_mutex);
+	fail_thread = false;
+	ready();
+	qualify();
+	assert(!pthread_join(holder, NULL));
+	assert(contention_proofs == 1 && contention_failures == 1);
+	assert(overlay_attempts == 2 && !mk_overlay_mutex);
+	expect_no_notice();
+#endif
 	puts("PASS: qualified normal shutdown only; panic/kexec/contention retain; bounded notice");
 	return 0;
 }

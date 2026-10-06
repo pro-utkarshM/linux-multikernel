@@ -153,9 +153,9 @@ def retention_trace(trace, health, mode, host_boot):
 
 def verify_retention(text, exit_status, mode, fault):
     if exit_status or (mode, fault) not in (('failed-retain',8), ('lost-ack',0),
-                                          ('lost-ack',7), ('panic-retain',0)):
+                                          ('lost-ack',7), ('panic-retain',0), ('contended-retain',0)):
         raise ValueError('failed process or unsupported injected scope')
-    if re.search(r'MK_LIFECYCLE_FAIL|MK_CHILD_FAIL|WARNING:|BUG:|Oops:|KASAN:|UBSAN:|'
+    if re.search(r'MK_LIFECYCLE_FAIL|MK_CHILD_FAIL|MK_TEST_SHUTDOWN_FAIL|WARNING:|BUG:|Oops:|KASAN:|UBSAN:|'
                  r'soft lockup|hung task',text):
         raise ValueError('unexpected guest diagnostic')
     if not re.search(r'^OpenSBI v',text,re.MULTILINE):
@@ -168,7 +168,8 @@ def verify_retention(text, exit_status, mode, fault):
     matches = list(re.finditer(r'^MK_LIFECYCLE_(\w+) ([^\n]*)$',text,re.MULTILINE))
     records=[(m[1],json.loads(m[2])) for m in matches]
     expected=(['BEGIN','CONTROL','REJECTED','RETAINED','PASS'] if mode=='failed-retain' else
-              ['BEGIN','CONTROL','CHILD','PANIC' if mode=='panic-retain' else 'TIMEOUT','RETAINED','PASS'])
+              ['BEGIN','CONTROL','CHILD', {'panic-retain': 'PANIC', 'contended-retain': 'CONTENDED'}.get(mode, 'TIMEOUT'),
+               'RETAINED','PASS'])
     if [kind for kind,_ in records]!=expected:
         raise ValueError('missing, duplicate or out-of-order scenario')
     data=dict(records)
@@ -191,6 +192,18 @@ def verify_retention(text, exit_status, mode, fault):
             raise ValueError('unexpected extra panic or ACK injection')
     elif re.search(r'Kernel panic|Call Trace:|Trigger a crash|Rebooting in \d+ seconds', text):
         raise ValueError('unexpected panic')
+    if mode == 'contended-retain':
+        interval = text[matches[2].end():matches[3].start()]
+        action = 'MK_CHILD_ACTION mode=poweroff'
+        proof = 'MK_TEST_SHUTDOWN_CONTENDED id=1 held=1 trylock=0 released=1'
+        if (text.count(action) != 1 or text.count('MK_TEST_SHUTDOWN_CONTENDED') != 1 or
+                interval.find(action) < 0 or interval.find(proof) <= interval.find(action) or
+                not re.search(re.escape(proof) + r'\r?$', interval, re.M) or
+                data['CONTENDED'] != {'state': 'active', 'host_boot': begin.get('host_boot'), 'action': 'poweroff'} or
+                'MK_TEST_ACK_DROPPED' in text):
+            raise ValueError('unproven or wrong-scope voluntary shutdown contention')
+    elif 'MK_TEST_SHUTDOWN_CONTENDED' in text:
+        raise ValueError('unexpected contention injection')
     if any(int(hart) not in harts for _,_,hart in re.findall(r'MK_FW_(REJECT|PENDING) mode=(\d+) hart=(\d+)',raw)):
         raise ValueError('firmware injection targets unowned hart')
     if (len(harts)!=2 or any(type(hart) is not int or hart < 0 for hart in harts) or

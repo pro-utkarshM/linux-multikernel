@@ -37,7 +37,11 @@ def retention_log(mode='failed-retain', fault=8):
                       ring_roundtrip=True, active_unload_rejected=True,
                       release='test', image_sha='a'*64, image_start=0xd8000000)
         text += 'MK_RETENTION_TRACE_BEGIN positive\nmk_copy:\nmk_start:\nMK_RETENTION_TRACE_END positive\n'
-        if mode == 'panic-retain':
+        if mode == 'contended-retain':
+            text += ('MK_CHILD_ACTION mode=poweroff\n'
+                     'MK_TEST_SHUTDOWN_CONTENDED id=1 held=1 trylock=0 released=1\n')
+            text += event('CONTENDED', state='active', host_boot='host', action='poweroff')
+        elif mode == 'panic-retain':
             text += ('MK_CHILD_ACTION mode=panic\nsysrq: Trigger a crash\n'
                      'Kernel panic - not syncing: sysrq triggered crash\nCall Trace:\n'
                      'Rebooting in 1 seconds..\n')
@@ -108,8 +112,27 @@ class Retention(unittest.TestCase):
         return importlib.import_module('verify_retention').verify_retention(text, 0, mode, fault)
 
     def test_reachable_failed_state_and_lost_ack_retention(self):
-        for mode, fault in (('failed-retain', 8), ('lost-ack', 7), ('lost-ack', 0), ('panic-retain', 0)):
+        for mode, fault in (('failed-retain', 8), ('lost-ack', 7), ('lost-ack', 0),
+                            ('panic-retain', 0), ('contended-retain', 0)):
             self.assertEqual(self.verify(retention_log(mode, fault), mode, fault)['result'], 'PASS')
+
+    def test_contention_requires_actual_trylock_failure_and_released_holder(self):
+        text = retention_log('contended-retain', 0)
+        for old, new in (('held=1', 'held=0'), ('trylock=0', 'trylock=1'),
+                         ('released=1', 'released=0'), ('mode=poweroff', 'mode=halt'),
+                         ('"state": "active"', '"state": "loaded"'),
+                         ('MK_TEST_SHUTDOWN_CONTENDED id=1', 'MK_TEST_SHUTDOWN_CONTENDED id=0')):
+            with self.subTest(mutation=old), self.assertRaises(ValueError):
+                self.verify(text.replace(old, new), 'contended-retain', 0)
+        for extra in ('MK_TEST_SHUTDOWN_FAIL id=1 reason=timeout\n',
+                      'MK_TEST_SHUTDOWN_CONTENDED id=1 held=1 trylock=0 released=1\n',
+                      'MK_TEST_ACK_DROPPED type=12288 operation=12290 resource=1 request=1 result=0\n'):
+            with self.assertRaises(ValueError):
+                self.verify(text + extra, 'contended-retain', 0)
+        # A marker outside the child action interval cannot qualify this run.
+        raw = 'MK_TEST_SHUTDOWN_CONTENDED id=1 held=1 trylock=0 released=1\n'
+        with self.assertRaises(ValueError):
+            self.verify(raw + text.replace(raw, ''), 'contended-retain', 0)
 
     def test_boot_pages_freed_after_pool_pointer_cleared(self):
         text=retention_log().replace('kind=ring phys=a000 size=8192 pool=2000',

@@ -14,7 +14,9 @@ awk '/^static void mk_riscv_shutdown_prepare\(/ { copy = 1 }
      /^void mk_riscv_notify_parent_halted\(/ { copy = 1 }
      copy { print }
      copy && /^}/ { copy = 0 }' "$src/arch/riscv/multikernel/doorbell.c" > "$build/notice.h"
-${CC:-cc} -std=gnu11 -Wall -Wextra -Werror -Wno-unused-function \
+for hooks in '' '-DMK_NATIVE_TEST_KERNEL'; do
+${CC:-cc} ${CFLAGS:-} $hooks -pthread -std=gnu11 -Wall -Wextra -Werror -Wno-unused-function \
     -Wno-unused-variable -Wno-unused-parameter \
-    -I"$build" "$test_dir/panic_doorbell_test.c" -o "$build/test"
+    -I"$build" -I"$test_dir" "$test_dir/panic_doorbell_test.c" -o "$build/test"
 "$build/test"
+done
