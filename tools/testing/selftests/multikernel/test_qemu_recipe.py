@@ -6,6 +6,7 @@ from pathlib import Path
 import unittest
 import tempfile
 import fcntl
+import subprocess
 from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location('recipe', Path(__file__).with_name('qemu-host-init.py'))
@@ -14,6 +15,38 @@ spec.loader.exec_module(recipe)
 
 
 class Recipe(unittest.TestCase):
+    def test_retention_poll_requires_fresh_complete_groups(self):
+        def busy():
+            raise OSError(errno.EBUSY, 'retained')
+        def group(sample, state):
+            return ''.join(f'MK_TEST_HSM id=1 phase=exec-rejected sample={sample} '
+                           f'hart={hart} state={state} error=0\n' for hart in (65537, 7))
+        with patch.object(recipe.time, 'sleep'):
+            with patch.object(recipe.time, 'monotonic', side_effect=[0, 0, 1]):
+                logs = iter((group(1, 0), group(1, 0)+group(2, 1)))
+                recipe.wait_retained_harts(busy, lambda: next(logs), [65537, 7], 1)
+            with patch.object(recipe.time, 'monotonic', side_effect=[0, 0, 1]):
+                with self.assertRaisesRegex(AssertionError, 'fresh'):
+                    recipe.wait_retained_harts(busy, lambda: group(1, 0), [65537, 7], 1)
+            with patch.object(recipe.time, 'monotonic', side_effect=[0, 0, 21]):
+                with self.assertRaises(TimeoutError):
+                    recipe.wait_retained_harts(busy, lambda: group(1, 3), [65537, 7], 1)
+            for log in ('', group(1, 1).splitlines()[0], group(1, 1).replace('error=0', 'error=-4')):
+                with self.subTest(log=log), self.assertRaises((AssertionError, ValueError)):
+                    recipe.wait_retained_harts(busy, lambda: log, [65537, 7], 1)
+            recipe.wait_retained_harts(busy, lambda: group(1, 3), [65537, 7], 3)
+            with self.assertRaises(AssertionError):
+                recipe.wait_retained_harts(lambda: None, lambda: group(1, 1), [65537, 7], 1)
+
+    def test_launcher_rejects_old_panic_and_wrong_retention_scope_before_staging(self):
+        runner = Path(__file__).with_name('qemu_lifecycle_test.sh')
+        for mode, harts, cycles, fault in (('panic', 2, 1, 0), ('panic-retain', 1, 1, 0),
+                                           ('panic-retain', 2, 2, 0), ('panic-retain', 2, 1, 7),
+                                           ('lost-ack', 2, 2, 0), ('lost-ack', 2, 1, 8)):
+            result = subprocess.run(['bash', str(runner), *(['/not-used'] * 6), mode,
+                                     str(harts), str(cycles), '', str(fault)], capture_output=True)
+            self.assertEqual(result.returncode, 2, result.stderr.decode())
+
     def test_load_fixture_has_no_writable_descriptor_during_loading(self):
         with recipe.load_fixture(b'image') as stream:
             self.assertEqual(fcntl.fcntl(stream.fileno(), fcntl.F_GETFL) & recipe.os.O_ACCMODE,

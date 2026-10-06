@@ -35,7 +35,8 @@ syscore callback ordering, live lockdep or firmware stop completion. Later
 syscore callbacks run while the resource mutex is retained, so a newly enabled
 callback with a conflicting dependency requires review and runtime qualification.
 Old panic/lost-ACK recipes expecting reusable settlement do not qualify this
-policy; explicit retention recipes and fresh runtime evidence are still required.
+policy. The explicit retention recipes below replace those expectations;
+fresh runtime evidence is still required.
 
 Rejected-execution observations (private, default-off)
 ----------------------------------------------------
@@ -59,8 +60,8 @@ These observations do not authorize reuse, cancel an outstanding operation or
 prove no future start. Retention recipes must bound their retries, require a
 complete fresh post-termination sample, correlate the frozen host/run identity,
 and treat errors or uncertainty as missing stop proof while retaining resources.
-The recipe/verifier work is still pending; neither old HSM traces nor a unit
-fixture PASS establishes native stopped/reclaimed memory safety.
+The retention recipes below check these boundaries; neither old HSM traces nor
+a unit fixture PASS establishes native stopped/reclaimed memory safety.
 
 The qemu-host-init.py/qemu-child-init recipes extend Nickolaev's #35 harness
 at 48507f176520b11a655344510b1b865b037e527f, with Kerf
@@ -85,7 +86,8 @@ Build CONFIG_MULTIKERNEL, CONFIG_MKTTY and CONFIG_KPROBES as built-ins. Boot
 QEMU virt/PLIC with stock OpenSBI, four harts, 2GiB, no network/host disks,
 console=ttyS0 rdinit=/init panic=0 kernelcore=1G log_buf_len=4M and
 mk_lifecycle_guard=modern-v5. Options: mk_lifecycle_mode=graceful|halt|poweroff|
-reboot|panic, mk_lifecycle_harts=1|2 and mk_lifecycle_cycles=1..50.
+reboot, mk_lifecycle_harts=1|2 and mk_lifecycle_cycles=1..50. Panic uses the separate
+two-hart, one-cycle panic-retain lane below, not reusable settlement.
 
 The host must observe actual child PID1, exact assigned physical CPUs despite
 different logical numbering, a ping/pong through mktty, fresh child boot IDs,
@@ -141,8 +143,59 @@ current Kerf, not a userspace status veto or an unsupported instance rmdir.
 No public bulk-unload syscall exists on this source; its generic free guard
 requires separate test-only native instrumentation, not invented ID-zero ABI.
 All executing cases also reject an active Image unload before termination.
-Lost-ACK testing remains pending. Do not count selector unit checks or a
-firmware build as a native fault test.
+Lost-ACK uses the explicit retention lane below. Do not count selector unit
+checks or a firmware build as a native fault test.
+
+Explicit retention modes (private test branch)
+--------------------------------------------
+
+Use HARTS=2, CYCLES=1, no alternate Image and one of:
+
+  MODE=lost-ack     FAULT_MODE=0  matching shutdown ACK dropped, observed STOPPED
+  MODE=lost-ack     FAULT_MODE=7  ACK dropped, synthetic persistent STOP_PENDING
+  MODE=panic-retain FAULT_MODE=0  child SysRq panic with panic=1, observed STOPPED
+  MODE=failed-retain FAULT_MODE=8 denied start, existing FAILED retention checks
+
+The launcher rejects the old MODE=panic rather than relabeling its historical
+reuse result. The child still receives the existing panic command. The verifier
+requires one ordered child action, SysRq panic and reboot-timeout banner and
+rejects panic diagnostics outside that interval. Lost-ACK requires the actual
+matching successful ACK drop and 30-second timeout, not merely an error return.
+
+ACTIVE lanes reject exec, unload and removal while retaining allocation and
+ownership identities, including after the console reference is closed. A healthy
+load/unload/delete control first proves release markers are live. Positive
+copy/start traces precede termination. A separate continuous guarded trace must
+remain free of copies/starts through termination and all rejected operations;
+both raw trace blocks must match the recorded evidence and action intervals.
+The guarded trace is read only after its END marker, not between operations
+(reading trace pauses recording). Both ftrace boundary markers must survive,
+entries-in-buffer must equal entries-written, and all four CPUs must report
+zero overruns, commit overruns and dropped events. Tracing and both probes must
+still be enabled at the endpoint. This accounts for the bounded observation
+window, not indefinite future activity after it.
+
+The pre-action ACTIVE snapshot supplies allocation identity only: ACTIVE is
+published before architecture start fills hart tracking, so that snapshot may
+have tracked=0. Fresh snapshots inside the anchored post-shutdown window must
+all have tracked=2 and unchanged allocations. Contradictory states and cleared
+resources inside the guard window are failures, never skipped discovery rows.
+
+After the timeout/panic banner, host /dev/kmsg BEGIN/END records bind observations
+to instance 1, mode and unchanged host boot ID. Rejected exec produces fresh
+complete assigned/tracked HSM groups; userspace retries for at most a 20-second
+deadline between calls, with a 100ms delay. This cannot bound a hung firmware
+call; the outer QEMU timeout remains fail-closed. Missing, duplicate, stale,
+wrong-hart, wrong-instance, incomplete or errored observations fail verification.
+The last complete group must report STOPPED, or explicitly STOP_PENDING in the
+fault-7 lane. STOP_PENDING is retention evidence, not host-confirmed stop proof.
+
+Even an all-STOPPED observation does not authorize ACTIVE reuse. No RECOVERED
+phase is accepted, resources remain until VM shutdown, and automatic panic or
+lost-ACK recovery remains unfinished. FAILED handling and the dedicated
+stuck-stop/pending-transition lanes remain separate. Unit tests check parsing,
+failure rejection and recipe boundaries only; fresh native runs, live lockdep
+and a contended voluntary-shutdown runtime case remain qualification gates.
 
 Manifest failure modes (private test branch)
 -------------------------------------------

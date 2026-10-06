@@ -97,7 +97,9 @@ class Verification(unittest.TestCase):
         panic = 'MK_CHILD_ACTION mode=panic\nsysrq: Trigger a crash\nKernel panic - not syncing: sysrq\nCall Trace:\nRebooting in 1 seconds..\n'
         stop = next(line for line in text.splitlines(keepends=True) if line.startswith('MK_LIFECYCLE_STOPPED'))
         text = text.replace(stop, panic + stop)
-        self.assertEqual(verify(text, 0, 'panic', 1, 1)['result'], 'PASS')
+        # Reusable panic settlement is intentionally no longer qualified here.
+        with self.assertRaises(ValueError):
+            verify(text, 0, 'panic', 1, 1)
         with self.assertRaises(ValueError):
             verify(text.replace('Rebooting in 1 seconds..', ''), 0, 'panic', 1, 1)
         with self.assertRaises(ValueError):

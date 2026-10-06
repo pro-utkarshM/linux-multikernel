@@ -7,7 +7,7 @@ import sys
 
 
 def verify(text, exit_status, mode, harts, cycles, images='same'):
-    if exit_status or mode not in ('graceful', 'halt', 'poweroff', 'reboot', 'panic', 'partial-start', 'loader-negative', 'writer-stress', 'manifest-prepare', 'manifest-capacity', 'placement-negative'):
+    if exit_status or mode not in ('graceful', 'halt', 'poweroff', 'reboot', 'partial-start', 'loader-negative', 'writer-stress', 'manifest-prepare', 'manifest-capacity', 'placement-negative'):
         raise ValueError('failed process or unsupported mode')
     if harts not in (1, 2) or not 1 <= cycles <= 50:
         raise ValueError('unsupported topology or cycle count')
@@ -16,10 +16,8 @@ def verify(text, exit_status, mode, harts, cycles, images='same'):
     if re.search(r'MK_LIFECYCLE_FAIL|MK_CHILD_FAIL|WARNING:|BUG:|Oops:|'
                  r'KASAN:|UBSAN:|soft lockup|hung task', text):
         raise ValueError('guest failure or unexpected kernel diagnostic')
-    if ('Kernel panic' in text or 'Call Trace:' in text) and mode != 'panic':
+    if re.search(r'Kernel panic|Call Trace:|Trigger a crash|Rebooting in \d+ seconds', text):
         raise ValueError('unexpected panic')
-    if mode == 'panic' and ('Trigger a crash' not in text or 'Rebooting in 1 seconds' not in text):
-        raise ValueError('panic timeout path not exercised')
     firmware = re.search(r'^OpenSBI v[^\r\n]+', text, re.MULTILINE)
     if not firmware:
         raise ValueError('no firmware identity')
@@ -46,7 +44,6 @@ def verify(text, exit_status, mode, harts, cycles, images='same'):
     boots = set()
     loaded_images = []
     image_start = None
-    panic_windows = []
     for cycle in range(1, cycles + 1):
         index = 1 + len(phases) * (cycle - 1)
         child, stopped = records[index][1], records[index + len(phases) - 1][1]
@@ -97,20 +94,7 @@ def verify(text, exit_status, mode, harts, cycles, images='same'):
                                 '\n'.join(evidence))
             if not states or states[-1] != '1':
                 raise ValueError('latest raw observation is not STOPPED for assigned hart')
-        start, end = matches[index].end(), matches[index + len(phases) - 1].start()
-        interval = text[start:end]
-        if mode == 'panic':
-            action = interval.find('MK_CHILD_ACTION mode=panic')
-            trigger = interval.find('Trigger a crash')
-            panic = interval.find('Kernel panic')
-            timeout = interval.find('Rebooting in 1 seconds')
-            if not 0 <= action < trigger < panic < timeout:
-                raise ValueError('cycle lacks ordered panic action and timeout evidence')
-            panic_windows.append((start + action, end))
         boots.add(child['boot'])
-    for diagnostic in re.finditer(r'Kernel panic|Call Trace:|Trigger a crash|Rebooting in 1 seconds', text):
-        if not any(start <= diagnostic.start() < end for start, end in panic_windows):
-            raise ValueError('panic evidence outside the requested cycle action interval')
     if images == 'same' and len(set(loaded_images)) != 1:
         raise ValueError('same-Image test changed payload')
     if images == 'alternate':
