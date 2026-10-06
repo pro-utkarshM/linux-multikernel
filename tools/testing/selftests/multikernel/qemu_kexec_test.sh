@@ -2,6 +2,11 @@
 # SPDX-License-Identifier: GPL-2.0-only
 # Isolated whole-machine kexec, not a multikernel spawn lifecycle test.
 set -euo pipefail
+export GIT_OPTIONAL_LOCKS=0
+if [[ $# != 7 && $# != 9 ]]; then
+    echo 'usage: KERNEL_BUILD HARNESS KERF_SOURCE RISCV_RUNTIME FIRMWARE OUTPUT_PARENT MODE [EXPECTED_SOURCE EXPECTED_REVISION]' >&2
+    exit 2
+fi
 test_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 kernel_build=${1:?KERNEL_BUILD HARNESS KERF_SOURCE RISCV_RUNTIME FIRMWARE OUTPUT_PARENT MODE}
 harness=${2:?missing harness}
@@ -19,16 +24,34 @@ harness=$(readlink -f "$harness")
 kerf=$(readlink -f "$kerf")
 runtime=$(readlink -f "$runtime")
 firmware=$(readlink -f "$firmware")
-source_dir=$(readlink -f "$kernel_build/source")
-test "$source_dir" = "$(CDPATH= cd -- "$test_dir/../../../.." && pwd)"
-test -z "$(git -C "$source_dir" status --porcelain)"
+recipe_source=$(CDPATH= cd -- "$test_dir/../../../.." && pwd)
+tree_status=$(git -C "$recipe_source" status --porcelain)
+test -z "$tree_status"
+recipe_revision=$(git -C "$recipe_source" rev-parse HEAD)
+expected_source=$recipe_source
+expected_revision=$recipe_revision
+if [[ $# == 9 ]]; then
+    if [[ -z "$8" || ! "$9" =~ ^[0-9a-f]{40}$ ]]; then
+        echo 'override requires a source directory and full commit SHA' >&2
+        exit 2
+    fi
+    expected_source=$(readlink -e "$8")
+    expected_revision=$9
+fi
+source_dir=$(readlink -e "$kernel_build/source")
+test "$source_dir" = "$expected_source"
+tree_status=$(git -C "$source_dir" status --porcelain)
+test -z "$tree_status"
 revision=$(git -C "$source_dir" rev-parse HEAD)
+test "$revision" = "$expected_revision"
 test "$(cat "$kernel_build/source-revision.txt")" = "$revision"
 repo=$(readlink -f "$(git -C "$source_dir" rev-parse --git-common-dir)/..")
 test "$(git -C "$harness" rev-parse HEAD)" = 48507f176520b11a655344510b1b865b037e527f
 test "$(git -C "$kerf" rev-parse HEAD)" = 38daa5687d6748846ffd003599a3bfba29785cd6
-test -z "$(git -C "$harness" status --porcelain)"
-test -z "$(git -C "$kerf" status --porcelain)"
+tree_status=$(git -C "$harness" status --porcelain)
+test -z "$tree_status"
+tree_status=$(git -C "$kerf" status --porcelain)
+test -z "$tree_status"
 diff -qr --exclude=__pycache__ "$kerf/src/kerf" "$runtime/usr/lib/python3/dist-packages/kerf"
 for option in RISCV 64BIT KEXEC KEXEC_FILE CRASH_RESERVE CRASH_DUMP PROC_VMCORE MAGIC_SYSRQ; do
     grep -qx "CONFIG_$option=y" "$kernel_build/.config"
@@ -45,11 +68,15 @@ install -m 0644 "$firmware" "$bundle/fw_dynamic.bin"
 install -m 0755 "$test_dir/qemu_kexec_guest.py" "$bundle/guest-primary.py"
 install -m 0755 "$test_dir/qemu-kexec-target" "$bundle/guest-target"
 install -m 0644 "$test_dir/verify_kexec.py" "$bundle/verify_kexec.py"
+install -m 0644 "$test_dir/qemu_kexec_test.sh" "$bundle/qemu_kexec_test.sh"
 install -m 0644 "$kernel_build/include/config/kernel.release" "$bundle/kernel.release"
 install -m 0644 "$kernel_build/build-artifacts.sha256" "$bundle/build-artifacts.sha256"
 python3 "$bundle/verify_kexec.py" --artifacts "$repo" "$kernel_build" "$bundle" \
     > "$bundle/artifact-verification.json"
 printf '%s\n' "$revision" > "$bundle/source-revision.txt"
+printf '%s\n' "$source_dir" > "$bundle/source-path.txt"
+printf '%s\n' "$recipe_revision" > "$bundle/recipe-revision.txt"
+printf '%s\n' "$recipe_source" > "$bundle/recipe-source-path.txt"
 python3 -c 'import secrets; print(secrets.token_hex(16))' > "$bundle/token.txt"
 token=$(cat "$bundle/token.txt")
 image_sha=$(sha256sum "$bundle/Image" | cut -d ' ' -f 1)
@@ -82,7 +109,8 @@ printf '\n' >> "$bundle/command.txt"
         guest-primary.py guest-target verify_kexec.py primary-initrd.cpio.gz \
         target-initrd.cpio.gz source-revision.txt token.txt command.txt qemu-version.txt \
         harness-revision.txt kerf-revision.txt build-artifacts.sha256 \
-        artifact-verification.json > SHA256SUMS
+        artifact-verification.json qemu_kexec_test.sh source-path.txt \
+        recipe-revision.txt recipe-source-path.txt > SHA256SUMS
 )
 rc=0
 timeout --kill-after=5s 300s "${command[@]}" > "$bundle/serial.log" 2>&1 || rc=$?

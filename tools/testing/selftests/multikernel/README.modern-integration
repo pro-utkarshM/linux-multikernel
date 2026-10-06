@@ -202,6 +202,22 @@ original build manifest is retained in the bundle. These are
 build-time provenance records: never change a revision stamp to relabel an old
 Image. Rebuild the final source and retain its actual hashes before running.
 
+By default the kernel source must be this recipe's checkout. To compare a
+separate baseline, append EXPECTED_SOURCE EXPECTED_REVISION (both required):
+
+  bash tools/testing/selftests/multikernel/qemu_kexec_test.sh \
+    KERNEL_BUILD HARNESS KERF_SOURCE RISCV_RUNTIME FIRMWARE OUTPUT_PARENT ordinary \
+    EXPECTED_SOURCE EXPECTED_REVISION
+
+EXPECTED_SOURCE must resolve to KERNEL_BUILD/source. EXPECTED_REVISION must be
+its full 40-character commit SHA and match both its HEAD and the build stamp.
+Both the kernel and recipe checkouts must be clean; a failed status check is
+an error, not evidence of cleanliness. The same artifact hash checks apply.
+The bundle records source-path.txt/source-revision.txt separately from
+recipe-source-path.txt/recipe-revision.txt and freezes qemu_kexec_test.sh too;
+all are included in SHA256SUMS. Do not relabel the recipe commit as the kernel
+commit, or treat baseline reproduction as final-stack qualification.
+
 Both modes require RV64 KEXEC/KEXEC_FILE, CRASH_RESERVE/CRASH_DUMP, PROC_VMCORE
 and MAGIC_SYSRQ built in. They support MK-enabled and MK-disabled builds; neither
 creates a multikernel instance or uses the #27/#28 spawn adapters. Both boot with
