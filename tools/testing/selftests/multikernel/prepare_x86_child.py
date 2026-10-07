@@ -148,6 +148,8 @@ def main():
         inputs += [host_init, child_init, HERE / 'verify_x86_writer.py', HERE / 'x86_admission_host_init.py']
     if args.profile == 'destroy':
         inputs += [host_init, child_init, HERE / 'verify_x86_destroy.py', HERE / 'x86_admission_host_init.py']
+    if args.profile in ('admission', 'destroy'):
+        inputs += [HERE / 'x86_snapshot.py', HERE / 'verify_x86_snapshot.py']
     hashes = {str(path.resolve()): digest(path) for path in inputs}
     print(json.dumps({'mode': 'prepare' if args.prepare else 'HOST_DRY_RUN_ONLY',
                       'source_head': source_head, 'artifact_revision': args.revision or 'UNATTESTED',
@@ -199,8 +201,11 @@ def main():
     if args.profile in ('admission', 'rcu', 'registry', 'tty', 'writer', 'destroy'):
         for name in ('x86_nested_host_init.py', 'x86_nested_child_init.py'):
             install(HERE / name, 'usr/lib/python3/dist-packages/' + name)
-    if args.profile in ('rcu', 'registry', 'tty', 'writer', 'destroy'):
+    if args.profile in ('admission', 'rcu', 'registry', 'tty', 'writer', 'destroy'):
         install(HERE / 'x86_admission_host_init.py', 'usr/lib/python3/dist-packages/x86_admission_host_init.py')
+    if args.profile in ('admission', 'destroy'):
+        for name in ('x86_snapshot.py', 'verify_x86_snapshot.py'):
+            install(HERE / name, 'usr/lib/python3/dist-packages/' + name)
     if args.profile == 'registry':
         install(HERE / 'x86_rcu_host_init.py', 'usr/lib/python3/dist-packages/x86_rcu_host_init.py')
     if args.profile == 'tty':
@@ -245,6 +250,8 @@ def main():
         shutil.copy2(HERE / 'verify_x86_writer.py', bundle / 'verify_x86_writer.py')
     if args.profile == 'destroy':
         shutil.copy2(HERE / 'verify_x86_destroy.py', bundle / 'verify_x86_destroy.py')
+    if args.profile in ('admission', 'destroy'):
+        shutil.copy2(HERE / 'verify_x86_snapshot.py', bundle / 'verify_x86_snapshot.py')
     install(args.kernel_build / 'vmlinux', 'payload/vmlinux')
     shutil.copy2(args.kernel_build / 'arch/x86/boot/bzImage', bundle / 'bzImage')
     shutil.copy2(config, bundle / 'kernel.config')

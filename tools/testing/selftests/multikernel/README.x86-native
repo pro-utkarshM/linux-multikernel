@@ -213,6 +213,38 @@ CFLAGS=-DCONFIG_MK_X86_NATIVE_CONCURRENCY_TEST). These fixtures prove verifier
 and hook behavior, not native QEMU results. All new kernel observations stay
 private and must be excluded from production submission ranges.
 
+Kernfs snapshot exclusion and normal removal (test-only acceptance)
+-----------------------------------------------------------------
+Reuse --profile=admission and --profile=destroy with their existing eight-CPU
+q35 commands and host mk_native_concurrency_test=1. Add HOST mk_snapshot_test=1
+and pass --snapshots to the corresponding frozen verify_x86_admission.py or
+verify_x86_destroy.py. Without --snapshots no snapshot qualification is claimed;
+the original profiles/verifier checks remain mandatory and unchanged.
+
+The admission extension precomputes a valid CPU-removal overlay, then holds the
+actual host controller at its existing resource-lock checkpoint. Both root and
+instance device_tree reads must return EAGAIN within2s, while the gate remains
+active. It releases the gate, completes the actual update and retries both reads
+within2s (at most201 additional attempts). The resulting pool members/free CPUs
+and instance CPU assignment must match the completed operation. It restores the
+CPU assignment before the original admission/timeout-drain scenarios run.
+
+The destruction extension uses the same checkpoint around the existing real
+removal operation after confirmed halt/unload. It keeps an instance kernfs
+descriptor open across normal removal: after release/removal, that descriptor
+must return ENODEV, and a retried root snapshot must show all child CPUs returned
+to the pool. Existing sender-reference/destruction gates and their verifier still
+prove retirement/reclamation order. No kernel hook or production interface is
+added. Gate expiry/loss, blocking reads, a failed writer or wrong resource content
+fail qualification. Each read is an independent snapshot; no coherence across
+two separate reads is asserted. This does not pause an active callback inside
+kernfs deactivation or reproduce corruption on an old kernel.
+
+test_x86_snapshot.py checks the oracle and bounded retry, including persistent
+EAGAIN, unrelated I/O errors, missing gate evidence and stale-descriptor success.
+Native acceptance requires fresh source-bound bundles and both --snapshots runs;
+unit checks alone are not native concurrency proof.
+
 Ordinary child CPU re-online diagnostic: use the existing six-CPU halt profile
 with HOST mk_x86_reonline=1 and QEMU -debugcon file:/absolute/fresh/debug.log.
 The host passes a fresh nonce in the child boot arguments. Before opening MKTTY

@@ -225,9 +225,13 @@ def main():
     parser.add_argument('trace', type=Path)
     parser.add_argument('--revision', required=True)
     parser.add_argument('--bundle', type=Path, required=True)
+    parser.add_argument('--snapshots', action='store_true', help='require native kernfs contention/retry evidence')
     args = parser.parse_args()
     errors = validate_nested_bundle(args.bundle, args.revision, profile='admission')
     errors += verify(args.trace.read_text(errors='replace'), args.revision)
+    if args.snapshots:
+        from verify_x86_snapshot import verify as verify_snapshots
+        errors += verify_snapshots(args.trace.read_text(errors='replace'))
     for error in errors:
         print('FAIL:', error)
     if not errors:

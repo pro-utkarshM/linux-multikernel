@@ -37,14 +37,17 @@ class Operation:
         return self.result
 
 
-def update(cpus):
+def prepare_update(cpus):
     from kerf.dtc.parser import DeviceTreeParser
     from kerf.dtc.overlay import OverlayGenerator
     old = DeviceTreeParser().parse_instance_dtb_from_bytes(
         (BASE / 'instances' / NAME / 'device_tree').read_bytes())
     new = copy.deepcopy(old)
     new.resources.cpus = cpus
-    blob = bytes(OverlayGenerator().generate_update_overlay(NAME, old, new))
+    return bytes(OverlayGenerator().generate_update_overlay(NAME, old, new))
+
+
+def apply_overlay(blob):
     previous = set((BASE / 'overlays').glob('tx_*'))
     start = time.monotonic()
     with (BASE / 'overlays/new').open('wb', buffering=0) as stream:
@@ -57,6 +60,10 @@ def update(cpus):
     transaction = created.pop()
     return dict(transaction=int(transaction.name.removeprefix('tx_')),
                 status=(transaction / 'status').read_text().strip(), elapsed_ms=elapsed)
+
+
+def update(cpus):
+    return apply_overlay(prepare_update(cpus))
 
 
 def pool_cpus():
@@ -115,6 +122,12 @@ def admission(fd, pending, nonce, child, spare):
     from kerf.kill.main import halt_multikernel
     from kerf.unload.main import kexec_file_unload, KEXEC_FILE_UNLOAD
     from kerf.load.main import KEXEC_MULTIKERNEL, KEXEC_MK_ID
+    if 'mk_snapshot_test=1' in Path('/proc/cmdline').read_text().split():
+        from x86_snapshot import probe
+        probe(prepare_update(child[:-1]), nonce, child, spare)
+        result = update(child)
+        if result['status'] != 'applied' or ownership() != child:
+            raise RuntimeError('snapshot CPU update did not restore initial ownership')
     console = Console(fd, pending, nonce)
     cpu = child[-1]
     for mode, point in (('controller-first', 1), ('worker-first', 2)):

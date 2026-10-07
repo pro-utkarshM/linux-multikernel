@@ -57,7 +57,15 @@ def destroy(fd, pending, nonce, child, spare):
         os.sched_setaffinity(0, {1})
         tx = DeviceTreeManager().apply_removal_overlay(NAME)
         return int(tx), (BASE / 'overlays' / ('tx_' + str(tx)) / 'status').read_text().strip()
-    transaction, result = Operation(remover).finish(10)
+    if 'mk_snapshot_test=1' in Path('/proc/cmdline').read_text().split():
+        from kerf.dtc.overlay import OverlayGenerator
+        from x86_snapshot import probe
+        # Construct the removal request before the real controller lock is held.
+        completed = probe(bytes(OverlayGenerator().generate_removal_overlay(NAME)),
+                          nonce, child, spare, removal=True)
+        transaction, result = completed['transaction'], completed['status']
+    else:
+        transaction, result = Operation(remover).finish(10)
     wait(lambda s: s['retired'] and len(s['events']) == 5, 3)
     (GATE / 'destroy_probe').write_bytes(b'1')
     held = wait(lambda s: s['probed'], 1)
