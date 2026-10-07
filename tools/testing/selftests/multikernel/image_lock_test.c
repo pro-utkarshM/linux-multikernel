@@ -159,6 +159,19 @@ static char image_bytes[16], ring[16], control_page;
 static mk_phys_cpu_t cpu_id = 65537;
 static struct mk_cpu_set cpus = { .nr = 1, .cap = 1, .ids = &cpu_id };
 
+#ifdef MK_NATIVE_TEST_KERNEL
+static unsigned int rejected_snapshots;
+static void mk_test_snapshot(struct mk_instance *instance, const char *phase)
+{
+	if (strcmp(phase, "exec-rejected"))
+		return;
+	expect("rejected snapshot holds both operation locks", held,
+	       KEXEC_LOCK | OVERLAY_LOCK);
+	expect("snapshot sees retained ACTIVE state", instance->state, MK_STATE_ACTIVE);
+	rejected_snapshots++;
+}
+#endif
+
 static void *resource_operation(void *unused);
 
 static void wait_for(bool *condition)
@@ -505,6 +518,9 @@ int main(void)
 	expect("active exec retains image", !!target.kimage, 1);
 	expect("active exec retains reference", references, 1);
 	expect("active exec releases all locks", held, 0);
+#ifdef MK_NATIVE_TEST_KERNEL
+	expect("active exec emits one private snapshot", rejected_snapshots, 1);
+#endif
 
 	for (i = 0; i < sizeof(exec_fail_stages) / sizeof(*exec_fail_stages); i++) {
 		reset(true);

@@ -57,6 +57,9 @@
 
 #include <crypto/hash.h>
 #include "kexec_internal.h"
+#ifdef MK_NATIVE_TEST_KERNEL
+#include "../tools/testing/selftests/multikernel/native_resource_trace.h"
+#endif
 
 atomic_t __kexec_lock = ATOMIC_INIT(0);
 
@@ -1716,6 +1719,9 @@ int multikernel_kexec_by_id(int mk_id)
 	instance = mk_image->mk_instance;
 	/* Execution must not bypass halt settlement, even if CPUs look parked. */
 	if (instance->state == MK_STATE_ACTIVE) {
+#ifdef MK_NATIVE_TEST_KERNEL
+		mk_test_snapshot(instance, "exec-rejected");
+#endif
 		rc = -EBUSY;
 		goto unlock;
 	}

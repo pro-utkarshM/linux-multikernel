@@ -1503,9 +1503,14 @@ static int mk_dt_emit_own_devices(void *fdt)
  * Returns: 0 on success, a libfdt error (-FDT_ERR_NOSPACE for a buffer
  * that is too small) or a negative error code on failure.
  */
+int __weak mk_arch_boot_nodes(void *fdt, struct mk_instance *instance)
+{
+	return 0;
+}
+
 static int mk_dt_emit_tree(struct mk_instance *instance, void *fdt,
 			   size_t size, int (*chosen)(void *fdt, void *data),
-			   void *data)
+			   void *data, bool boot)
 {
 	bool pool = instance == mk_self && mk_pool;
 	int ret;
@@ -1561,6 +1566,8 @@ static int mk_dt_emit_tree(struct mk_instance *instance, void *fdt,
 				ret = mk_dt_emit_host_bridges(instance, fdt);
 		}
 	}
+	if (!ret && boot)
+		ret = mk_arch_boot_nodes(fdt, instance);
 	if (!ret && chosen) {
 		ret = fdt_begin_node(fdt, "chosen");
 		if (!ret)
@@ -1702,8 +1709,8 @@ static int mk_dt_emit_instance(struct mk_instance *instance, void *fdt,
 {
 	if (instance->host_tree)
 		return mk_dt_emit_tree(instance, fdt, size,
-				       mk_dt_emit_requested_chosen, instance);
-	return mk_dt_emit_tree(instance, fdt, size, NULL, NULL);
+				       mk_dt_emit_requested_chosen, instance, false);
+	return mk_dt_emit_tree(instance, fdt, size, NULL, NULL, false);
 }
 
 /**
@@ -1723,7 +1730,7 @@ static int mk_dt_emit_instance(struct mk_instance *instance, void *fdt,
 int mk_dt_emit_boot_tree(struct mk_instance *instance, void *fdt, size_t size,
 			 int (*chosen)(void *fdt, void *data), void *data)
 {
-	return mk_dt_emit_tree(instance, fdt, size, chosen, data);
+	return mk_dt_emit_tree(instance, fdt, size, chosen, data, true);
 }
 
 /**

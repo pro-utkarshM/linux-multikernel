@@ -1018,6 +1018,8 @@ phys_addr_t mk_manifest_entry_stub_phys(void);
 
 /* Called under the exec serialization, before emitting the boot manifest. */
 int mk_arch_prepare_instance(struct kimage *image, struct mk_instance *instance);
+/* Test integration: emit root children only, before boot-tree finalization. */
+int mk_arch_boot_nodes(void *fdt, struct mk_instance *instance);
 /* Emit properties only: the caller has opened /chosen, before its children. */
 int mk_arch_manifest_chosen(void *fdt, struct kimage *image,
 			    struct mk_instance *instance);

@@ -26,6 +26,20 @@
 
 #include "internal.h"
 
+#ifdef MK_NATIVE_TEST_KERNEL
+#include "../../tools/testing/selftests/multikernel/native_manifest_fault.h"
+static int __init mk_test_manifest_setup(char *value)
+{
+	unsigned int mode;
+
+	if (kstrtouint(value, 0, &mode) || mode > 2)
+		return 0;
+	mk_test_manifest_mode = mode;
+	return 1;
+}
+__setup("mk_test_manifest_fault=", mk_test_manifest_setup);
+#endif
+
 /* Physical address of the manifest this kernel booted with, 0 if none */
 static phys_addr_t mk_manifest_fdt_phys;
 static phys_addr_t mk_manifest_entry_stub;
@@ -372,6 +386,7 @@ int mk_manifest_finalize(struct kimage *image)
 {
 	struct mk_manifest_ctx ctx = { .image = image };
 	struct mk_instance *instance;
+	size_t capacity = MK_MANIFEST_SIZE;
 	void *fdt;
 	int ret;
 
@@ -388,12 +403,22 @@ int mk_manifest_finalize(struct kimage *image)
 	}
 
 	ctx.instance = instance;
+#ifdef MK_NATIVE_TEST_KERNEL
+	if (mk_test_manifest_take(instance, 1)) {
+		ret = -ENOMEM;
+		goto out;
+	}
+#endif
 	ret = mk_arch_prepare_instance(image, instance);
 	if (ret)
 		goto out;
 
 	fdt = phys_to_virt(instance->manifest_phys);
-	ret = mk_dt_emit_boot_tree(instance, fdt, MK_MANIFEST_SIZE, mk_manifest_chosen,
+#ifdef MK_NATIVE_TEST_KERNEL
+	if (mk_test_manifest_take(instance, 2))
+		capacity = 128;
+#endif
+	ret = mk_dt_emit_boot_tree(instance, fdt, capacity, mk_manifest_chosen,
 				   &ctx);
 	if (ret) {
 		pr_err("Failed to write the boot tree for instance %d: %d\n",

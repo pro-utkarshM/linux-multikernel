@@ -1,0 +1,18 @@
+diff --git a/lib/sbi/sbi_ecall_hsm.c b/lib/sbi/sbi_ecall_hsm.c
+index a6e83b0..20ffe08 100644
+--- a/lib/sbi/sbi_ecall_hsm.c
++++ b/lib/sbi/sbi_ecall_hsm.c
+@@ -17,0 +18,4 @@
++#include <sbi/riscv_locks.h>
++#include <sbi/sbi_hartmask.h>
++#include <sbi/sbi_console.h>
++#include "opensbi_test_hsm.h"
+@@ -29,0 +34,3 @@ static int sbi_ecall_hsm_handler(unsigned long extid, unsigned long funcid,
++		ret = mk_test_hsm_start(regs->a0, regs->a1, regs->a2);
++		if (ret)
++			break;
+@@ -31,0 +39,2 @@ static int sbi_ecall_hsm_handler(unsigned long extid, unsigned long funcid,
++		if (!ret)
++			mk_test_hsm_started(regs->a0, regs->a1, regs->a2);
+@@ -38,0 +48 @@ static int sbi_ecall_hsm_handler(unsigned long extid, unsigned long funcid,
++		ret = mk_test_hsm_status(regs->a0, ret);

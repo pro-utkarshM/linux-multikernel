@@ -11,8 +11,13 @@ awk '/^struct mk_manifest_ctx / { copy = 1 }
      /^int mk_manifest_finalize\(/ { copy = 1 }
      copy { print }
      copy && /^}/ { copy = 0 }' "$src/kernel/multikernel/manifest.c" > "$build/under-test.h"
-${CC:-cc} -std=gnu11 -Wall -Wextra -Werror -Wno-unused-function \
-    -I"$build" -I"$src/scripts/dtc/libfdt" \
-    "$test_dir/manifest_hook_test.c" "$src"/scripts/dtc/libfdt/*.c \
-    -o "$build/test"
-"$build/test"
+for variant in plain native; do
+    native_flag=
+    test "$variant" != native || native_flag=-DMK_NATIVE_TEST_KERNEL
+    ${CC:-cc} $native_flag -std=gnu11 -Wall -Wextra -Werror \
+        -Wno-unused-function -Wno-unused-variable \
+        -I"$build" -I"$test_dir" -I"$src/scripts/dtc/libfdt" \
+        "$test_dir/manifest_hook_test.c" "$src"/scripts/dtc/libfdt/*.c \
+        -o "$build/test"
+    "$build/test"
+done

@@ -1,0 +1,442 @@
+Modern QEMU test integration, not a production #27/#28 submission
+================================================================
+
+Branch test/riscv-final-stack-v5 carries separate modern manifest boot-tree
+and SBI software-IPI adapters above #23-25 and #26. Neither adapter implements
+AIA, general device assignment or ACPI synthesis. The parent endpoint is
+pinned locally; tests keep the top-level host running. Shared receive-ring
+reset does not cancel remote queued work or supply restart epochs (#7).
+
+Private voluntary shutdown qualification
+---------------------------------------
+
+The adapter only permits a successful HALTED notice after normal shutdown
+reaches its spawn-only syscore callback. The normal kernel halt/poweroff/reboot
+paths have already called cpu_hotplug_disable() there. The callback rejects
+panic and kexec, then trylocks the existing resource mutex and retains it until
+terminal stop. This excludes local controllers and incoming resource mutations;
+the parent must still confirm every assigned/tracked hart STOPPED. The resource
+mutex is not acquired with a blocking wait in this callback or in machine-stop.
+
+Direct machine-stop or emergency restart without prior qualification cannot
+publish this notice. Neither can observed panic (even after qualification),
+initialization failure or resource-lock contention.
+SYSTEM_RESTART alone is not proof: emergency_restart() sets it without the
+normal drain. Kexec also reaches syscore but later reopens CPU hotplug. Failure
+to qualify or send must not prevent local/secondary HART_STOP. The parent keeps
+ACTIVE ownership and allocations when settlement is unknown; direct execution
+cannot bypass this retention. Automatic panic/lost-ACK recovery is unfinished.
+
+panic_doorbell_test.sh executes the real registration, qualification and producer
+code with controlled kernel boundaries. shutdown_test.sh checks local-stop
+routing even when the notice helper returns; its counter measures attempts,
+not successful publication. Neither test proves native hotplug locking, later
+syscore callback ordering, live lockdep or firmware stop completion. Later
+syscore callbacks run while the resource mutex is retained, so a newly enabled
+callback with a conflicting dependency requires review and runtime qualification.
+Old panic/lost-ACK recipes expecting reusable settlement do not qualify this
+policy. The explicit retention recipes below replace those expectations;
+fresh runtime evidence is still required.
+
+Rejected-execution observations (private, default-off)
+----------------------------------------------------
+
+With mk_test_resource_trace=1, host instance 0 records a resource snapshot for
+target instance 1 before returning EBUSY from ACTIVE execution. In this private
+RISC-V build only, it then issues one raw HART_STATUS query for each physical
+hart in the assigned/tracked union, including orphan tracking without duplicate
+queries. The existing resource mutex remains held; no tracking, ownership,
+allocation or lifecycle state is modified. There is no firmware polling loop.
+
+Each MK_TEST_HSM line carries id, phase=exec-rejected, a monotonic sample number,
+physical hart, state and raw SBI error. Nonzero error forces state=-1, never a
+stopped claim from an undefined firmware return value. Sample numbers are
+boot-local; the sequential statuses are not an atomic all-hart observation.
+State and confirmation
+snapshots outside exec-rejected do not add these queries. The per-object private
+build flag and runtime switch must not appear in the production series.
+
+These observations do not authorize reuse, cancel an outstanding operation or
+prove no future start. Retention recipes must bound their retries, require a
+complete fresh post-termination sample, correlate the frozen host/run identity,
+and treat errors or uncertainty as missing stop proof while retaining resources.
+The retention recipes below check these boundaries; neither old HSM traces nor
+a unit fixture PASS establishes native stopped/reclaimed memory safety.
+
+The qemu-host-init.py/qemu-child-init recipes extend Nickolaev's #35 harness
+at 48507f176520b11a655344510b1b865b037e527f, with Kerf
+38daa5687d6748846ffd003599a3bfba29785cd6. Use that harness's unchanged
+scripts/build-initramfs.sh for fresh host/secondary output directories;
+host payload is named /payload/vmlinux but contains the raw RISC-V Image.
+Use the merged-/usr RISC-V runtime with Python, libfdt, Kerf and static BusyBox.
+
+Run bash qemu_lifecycle_test.sh KERNEL_BUILD HARNESS KERF_SOURCE RISCV_RUNTIME
+FIRMWARE OUTPUT_PARENT MODE HARTS CYCLES [ALTERNATE_BUILD] [FAULT_MODE]. OUTPUT_PARENT must end in /build;
+every invocation creates a fresh bundle and preserves failures. It verifies
+dependency pins, source cleanliness and exact Kerf runtime contents, reuses
+the unchanged pinned packing helper, freezes inputs and verifies raw logs.
+Build vmlinux/Image from the clean source immediately before packaging. The
+optional alternate build must use the same clean source and config, but a
+different LOCALVERSION (for example LOCALVERSION=-mk-alt) and distinct Image.
+Alternate runs require at least two cycles. Each executing child's release
+must match its selected frozen build; hashes must alternate at a fixed physical
+Image address. Use CYCLES=50 for same and alternating replacement qualification.
+
+Build CONFIG_MULTIKERNEL, CONFIG_MKTTY and CONFIG_KPROBES as built-ins. Boot
+QEMU virt/PLIC with stock OpenSBI, four harts, 2GiB, no network/host disks,
+console=ttyS0 rdinit=/init panic=0 kernelcore=1G log_buf_len=4M and
+mk_lifecycle_guard=modern-v5. Options: mk_lifecycle_mode=graceful|halt|poweroff|
+reboot, mk_lifecycle_harts=1|2 and mk_lifecycle_cycles=1..50. Panic uses the separate
+two-hart, one-cycle panic-retain lane below, not reusable settlement.
+
+The host must observe actual child PID1, exact assigned physical CPUs despite
+different logical numbering, a ping/pong through mktty, fresh child boot IDs,
+post-action HSM STOPPED evidence for every assigned hart and unchanged host
+boot ID. On failure, retain the entire archive/config/firmware/command/log and
+exit status. Host printk is retained in dmesg, not interleaved with structured
+serial output; it is emitted after the final marker and checked for warnings.
+A process exit zero alone is never a pass. These recipes do not
+yet cover firmware fault injection, live CPU add,
+native callback/RCU concurrency or physical cache behavior.
+
+Test-only firmware selectors (not real SBI domain policy)
+--------------------------------------------------------
+
+Use a fresh OpenSBI worktree at 74434f255873d74e56cc50aa762d1caf24c099f8,
+apply opensbi_test_hsm.patch with git apply --unidiff-zero and copy
+opensbi_test_hsm.h to lib/sbi/. The context-free asset avoids treating unified
+diff context indentation as source whitespace; the exact source pin is checked.
+Only those
+two paths may differ. Never reuse the historical dirty firmware checkout.
+Run opensbi_fault_build.sh SOURCE KERNEL_BUILD MODE OUTPUT_PARENT to create
+a fresh firmware bundle. Its priming selector is derived from the frozen ELF
+and Image header for QEMU virt, not a historical literal address. It records
+source, selector, patch, host hashes, command, build log and firmware hashes.
+
+Modes: 0 off; 1 denied priming; 2 invalid priming; 3 second priming denied;
+4 denied actual primary start; 5 persistently denied child-stub secondary starts
+after primary start (host return to a different entry remains allowed);
+6 synthetic STOP_PENDING for 32 polls after actual STOPPED, then resolves;
+7 synthetic permanent STOP_PENDING after actual STOPPED. All selectors are
+test-only. Modes 6/7 intentionally hide firmware's actual STOPPED state to
+exercise host confirmation/retention, not emulate a hart still executing.
+Unknown/sparse hart IDs are translated by firmware's mapping, never array
+indexed directly. opensbi_fault_test.sh checks selectors at modeled boundaries.
+Modes 1..4 are one-shot. Mode 5 defers its marker until a host status query,
+avoiding firmware/host UART character interleaving during child boot logs.
+
+Mode 6 uses the normal graceful/two-hart/one-cycle recipe and must additionally
+pass verify_pending.py SERIAL_LOG EXIT_STATUS. It requires an injection marker
+and a pending-to-stopped trace for each assigned hart; normal success without
+fault injection is not accepted. Native denial/partial/stuck-state recipes use
+MODE=deny-primary|partial-start|stuck-stop, HARTS=2, CYCLES=1, an empty alternate
+build argument and FAULT_MODE=1..4|5|7 respectively. The frozen fault verifier
+requires firmware injection markers, exact errno and confirmed cleanup for
+denied starts; reduced online membership and every hart stopped after partial
+start; and blocked exec/unload/kernel deletion with retained ownership for a
+permanently pending report. Failed halt confirmation retains ACTIVE on this
+source; do not fabricate FAILED to make a test pass. This exercises active
+retention, not FAILED-state reclamation, which needs a separate reachable
+test setup. Positive trace controls precede no-copy/no-start assertions.
+Deletion writes an actual removal overlay through
+current Kerf, not a userspace status veto or an unsupported instance rmdir.
+No public bulk-unload syscall exists on this source; its generic free guard
+requires separate test-only native instrumentation, not invented ID-zero ABI.
+All executing cases also reject an active Image unload before termination.
+Lost-ACK uses the explicit retention lane below. Do not count selector unit
+checks or a firmware build as a native fault test.
+
+Explicit retention modes (private test branch)
+--------------------------------------------
+
+Use HARTS=2, CYCLES=1, no alternate Image and one of:
+
+  MODE=lost-ack     FAULT_MODE=0  matching shutdown ACK dropped, observed STOPPED
+  MODE=lost-ack     FAULT_MODE=7  ACK dropped, synthetic persistent STOP_PENDING
+  MODE=panic-retain FAULT_MODE=0  child SysRq panic with panic=1, observed STOPPED
+  MODE=contended-retain FAULT_MODE=0  voluntary poweroff with actual mutex contention
+  MODE=failed-retain FAULT_MODE=8 denied start, existing FAILED retention checks
+
+The launcher rejects the old MODE=panic rather than relabeling its historical
+reuse result. The child still receives the existing panic command. The verifier
+requires one ordered child action, SysRq panic and reboot-timeout banner and
+rejects panic diagnostics outside that interval. Lost-ACK requires the actual
+matching successful ACK drop and 30-second timeout, not merely an error return.
+
+ACTIVE lanes reject exec, unload and removal while retaining allocation and
+ownership identities, including after the console reference is closed. A healthy
+load/unload/delete control first proves release markers are live. Positive
+copy/start traces precede termination. A separate continuous guarded trace must
+remain free of copies/starts through termination and all rejected operations;
+both raw trace blocks must match the recorded evidence and action intervals.
+The guarded trace is read only after its END marker, not between operations
+(reading trace pauses recording). Both ftrace boundary markers must survive,
+entries-in-buffer must equal entries-written, and all four CPUs must report
+zero overruns, commit overruns and dropped events. Tracing and both probes must
+still be enabled at the endpoint. This accounts for the bounded observation
+window, not indefinite future activity after it.
+
+The pre-action ACTIVE snapshot supplies allocation identity only: ACTIVE is
+published before architecture start fills hart tracking, so that snapshot may
+have tracked=0. Fresh snapshots inside the anchored post-shutdown window must
+all have tracked=2 and unchanged allocations. Contradictory states and cleared
+resources inside the guard window are failures, never skipped discovery rows.
+
+After the timeout/panic banner, host /dev/kmsg BEGIN/END records bind observations
+to instance 1, mode and unchanged host boot ID. Rejected exec produces fresh
+complete assigned/tracked HSM groups; userspace retries for at most a 20-second
+deadline between calls, with a 100ms delay. This cannot bound a hung firmware
+call; the outer QEMU timeout remains fail-closed. Missing, duplicate, stale,
+wrong-hart, wrong-instance, incomplete or errored observations fail verification.
+The last complete group must report STOPPED, or explicitly STOP_PENDING in the
+fault-7 lane. STOP_PENDING is retention evidence, not host-confirmed stop proof.
+
+Even an all-STOPPED observation does not authorize ACTIVE reuse. No RECOVERED
+phase is accepted, resources remain until VM shutdown, and automatic panic or
+lost-ACK recovery remains unfinished. FAILED handling and the dedicated
+stuck-stop/pending-transition lanes remain separate. Unit tests check parsing,
+failure rejection and recipe boundaries only; fresh native runs and live lockdep
+remain qualification gates, including the contended voluntary-shutdown recipe.
+
+Contended voluntary shutdown (private test branch)
+-------------------------------------------------
+
+MODE=contended-retain uses two harts, one same-Image cycle and fault-0 firmware.
+Only the child receives mk_test_shutdown_contend=1. The private doorbell object
+includes native_shutdown_fault.h under MK_NATIVE_TEST_KERNEL; the selector is
+default-off and also requires a spawned instance with ID 1. Neither the host nor
+the healthy load/unload control enables it.
+
+At normal syscore shutdown a kernel thread acquires the actual overlay mutex,
+signals ownership, and holds it while the unmodified qualification trylock is
+attempted. The callback releases and waits for the holder after that attempt.
+Each completion wait is bounded at five seconds; thread creation, acquisition,
+release or timing failure emits MK_TEST_SHUTDOWN_FAIL and cannot qualify a run.
+Static completion storage outlives a delayed worker. This is a one-terminal-
+shutdown test hook, not a controller interface or a repeatable recovery API.
+
+The raw child action must be poweroff, followed by exactly one
+MK_TEST_SHUTDOWN_CONTENDED id=1 held=1 trylock=0 released=1 marker. Only an actual
+failed trylock with successful holder release emits it. The existing retention
+verifier then requires both assigned harts observed STOPPED, ACTIVE allocation
+retention, exec/unload/destroy refusal and host survival. It forbids panic, ACK
+loss, automatic reuse, copies/starts/frees and trace loss. The next healthy
+shutdown VM must run with the selector absent to retain the positive control.
+
+The hook creates real mutex contention, not a real resource mutation in flight;
+it does not qualify every controller race. Host-thread fixtures model kernel
+thread/completion boundaries; only a fresh QEMU run qualifies the native path.
+Keep this hook, adapter and their build flag out of the production patch series.
+
+Manifest failure modes (private test branch)
+-------------------------------------------
+
+MODE=manifest-prepare or manifest-capacity, HARTS=1|2, CYCLES=1 and
+FAULT_MODE=0 select a default-off, host-only, instance-1 one-shot kernel fault.
+The recipe passes mk_test_manifest_fault=1 or 2; other modes pass 0. Mode 1
+returns ENOMEM at the architecture preparation boundary (not a real allocator
+exhaustion test). Mode 2 lets preparation succeed, then limits the actual
+boot-tree emitter to 128 bytes to exercise ENOSPC. Production branches do not
+contain these selectors or their per-object MK_NATIVE_TEST_KERNEL build flag.
+
+Each run must observe all harts STOPPED before Image copies, exact manifest
+failure, no HART_START, unchanged ownership and no premature free. Copies are
+expected: generic execution copies the stopped Image before finalizing its tree.
+The recipe retries the same loaded Image without reloading; actual child boot,
+ring roundtrip and copy/start traces are positive controls. Normal halt, all-hart
+stop confirmation, unload and deletion follow. verify_manifest.py also requires
+correlated Image/control/ring/manifest/pool release markers after stopping.
+The Image free must match the loader's physical address and allocated size;
+an initrd free cannot substitute for it. Each hart's latest pre-copy status
+must be STOPPED in both the failure and retry windows, and retry starts must
+follow the last Image/initrd copy.
+The shared release verifier now requires image_extent in both retention CONTROL
+and manifest RELEASED records and correlates it with the raw loader log. Old
+logs lacking that field are not qualified by this stricter verifier; preserve
+their original frozen verifier and run the new cases on fresh artifacts.
+The focused manifest check runs with and without instrumentation and uses real
+libfdt for the small-buffer case. Verifier unit fixtures are not QEMU evidence.
+Native qualification requires fresh committed source and matching build artifacts.
+
+Physical-placement rejection (private test branch)
+--------------------------------------------------
+
+MODE=placement-negative requires HARTS=1|2, CYCLES=1, no alternate build and
+FAULT_MODE=0. Only this mode adds mk_test_bad_placement=1 to the host command
+line; the selector is default-off and is not passed to the child. It uses a
+valid, unmodified Image and initrd, with no HSM fault selector (mode0) and no
+manifest fault. Mode0 firmware may still contain the private test instrumentation.
+
+The private native hook must target host instance 0 loading multikernel
+instance 1, once, at the first successful allocation with buf_align==SZ_2M.
+Immediately before the existing alignment rejection it changes only the local
+physical address to original|PAGE_SIZE (4096), preserving the original virtual
+allocation pointer. Required raw printk records, in order, are:
+
+  MK_TEST_PLACEMENT id=1 original=0x... injected=0x... size=DEC align=0x200000
+  Multikernel allocation not aligned: phys=0x..., required=0x200000
+  MK_TEST_FREE id=1 kind=allocation phys=HEX size=DEC pool=HEX
+
+verify_placement.py requires exactly one injection of an originally 2MiB-aligned
+address, a 4096-byte displacement, matching rejection and exactly one free of
+the original address and size before retry. The injected address must never
+appear as a freed allocation. The valid load must return ENOMEM, leave READY,
+both ownership trees and the host boot ID unchanged, and show no copy/start.
+The guard log must occur in retained raw dmesg; JSON claims alone cannot pass.
+
+Retry loads the same payload, boots the child and completes a live ring
+roundtrip. Separately emitted raw trace windows must match the rejected and
+recovered JSON records. The recovery trace includes both load-time copies and
+exec-time copies: a trace_marker named MK_PLACEMENT_EXEC separates them. Loading
+must copy without starting; exec requires each hart's latest pre-copy status
+to be STOPPED and all exec copies to precede the first start. Normal graceful halt,
+STOPPED confirmation, unload and deletion follow. PLACEMENT_RELEASED reuses
+the manifest lane's healthy Image/control/ring/manifest/pool release proof,
+without claiming that a manifest fault ran. Raw loader/resource/free records
+must match the executing Image and the two distinct release windows.
+The shared lifecycle verifier now requires each hart's latest final observation
+to be STOPPED, and correlates raw child boot/release identities with their cycle
+records. Preserve historical bundles with their frozen verifiers; these stricter
+checks need new evidence, not retroactive relabeling of old runs.
+
+The runner freezes and hashes verify_placement.py with the other verifiers.
+It can also be invoked as:
+
+  python3 verify_placement.py SERIAL_LOG EXIT_STATUS HARTS
+
+Local verifier/recipe checks (no kernel build or VM):
+
+  python3 -B -m unittest discover -s tools/testing/selftests/multikernel -p 'test_*.py'
+  bash -n tools/testing/selftests/multikernel/qemu_lifecycle_test.sh
+
+test_verify_placement.py is a synthetic fixture with false-positive mutations,
+not evidence that the native hook, allocator or QEMU lifecycle ran. Native
+qualification still requires the private hook, matching fresh build artifacts
+and a retained QEMU bundle. This lane does not establish physical cache or
+firmware fault behavior.
+
+Ordinary and crash file-kexec regression gates
+--------------------------------------------
+
+Run in two separate disposable QEMU VMs:
+
+  bash tools/testing/selftests/multikernel/qemu_kexec_test.sh \
+    KERNEL_BUILD HARNESS KERF_SOURCE RISCV_RUNTIME FIRMWARE OUTPUT_PARENT ordinary
+  bash tools/testing/selftests/multikernel/qemu_kexec_test.sh \
+    KERNEL_BUILD HARNESS KERF_SOURCE RISCV_RUNTIME FIRMWARE OUTPUT_PARENT crash
+
+These intentionally replace the primary kernel, unlike the spawn tests that
+require the parent to survive. No disk or network is attached. The helper never
+executes a host reboot: guest entrypoints refuse execution outside PID1, and
+the Python primary also checks RISC-V. Run them only via the QEMU recipe.
+
+Use the same #35/Kerf/runtime pins listed above and OpenSBI without an active
+fault selector. OUTPUT_PARENT must end in /build. The runner uses the unchanged
+#35 host/secondary initramfs packer in a new directory and keeps failed runs.
+Its source must be clean and match KERNEL_BUILD/source-revision.txt; it checks
+KERNEL_BUILD/build-artifacts.sha256 relative to the repository root. The exact
+selected Image/ELF/config entries must exist, and frozen copies must match those
+digests; a manifest covering another build or only config cannot pass. The
+original build manifest is retained in the bundle. These are
+build-time provenance records: never change a revision stamp to relabel an old
+Image. Rebuild the final source and retain its actual hashes before running.
+
+By default the kernel source must be this recipe's checkout. To compare a
+separate baseline, append EXPECTED_SOURCE EXPECTED_REVISION (both required):
+
+  bash tools/testing/selftests/multikernel/qemu_kexec_test.sh \
+    KERNEL_BUILD HARNESS KERF_SOURCE RISCV_RUNTIME FIRMWARE OUTPUT_PARENT ordinary \
+    EXPECTED_SOURCE EXPECTED_REVISION
+
+EXPECTED_SOURCE must resolve to KERNEL_BUILD/source. EXPECTED_REVISION must be
+its full 40-character commit SHA and match both its HEAD and the build stamp.
+Both the kernel and recipe checkouts must be clean; a failed status check is
+an error, not evidence of cleanliness. The same artifact hash checks apply.
+The bundle records source-path.txt/source-revision.txt separately from
+recipe-source-path.txt/recipe-revision.txt and freezes qemu_kexec_test.sh too;
+all are included in SHA256SUMS. Do not relabel the recipe commit as the kernel
+commit, or treat baseline reproduction as final-stack qualification.
+
+Both modes require RV64 KEXEC/KEXEC_FILE, CRASH_RESERVE/CRASH_DUMP, PROC_VMCORE
+and MAGIC_SYSRQ built in. They support MK-enabled and MK-disabled builds; neither
+creates a multikernel instance or uses the #27/#28 spawn adapters. Both boot with
+four harts and 2GiB. Ordinary uses reboot(KEXEC). Crash uses
+crashkernel=256M in the primary, checks the actual reservation, loads with
+KEXEC_FILE_ON_CRASH, and triggers SysRq-c. Both also set KEXEC_FILE_DEBUG (actual
+flags8/10) to record the final entry/type/flags. Purgatory remains enabled when
+configured: the recorded entry can differ from the raw Image base and is matched
+against machine_kexec's jump, not against the Image base.
+The capture kernel gets nr_cpus=1 and a small BusyBox initramfs. The primary's
+Python runtime is not in the capture
+initramfs. Legacy kexec_load is not covered.
+
+The frozen verifier requires one firmware boot, two kernel boots, correct load
+slot/flags, a matching final load/machine_kexec entry address, and ordered
+BEGIN/LOADED/HANDOFF/TARGET/PASS records. Each run has an externally checked nonce;
+the target must have a different boot ID, the expected release and CPU count.
+Crash requires exactly one intended primary SysRq panic, crashdump evidence,
+and an actual 64-byte read
+of /proc/vmcore with a bounded ELF64 little-endian RISC-V core header. This does
+not validate all dump contents or every captured register/page. Timeout, late
+failure, unexpected diagnostics, wrong identities and missing stages fail closed.
+Post-PASS kernel poweroff evidence is mandatory; reset diagnostics are rejected
+because -no-reboot can make a reset terminate QEMU with exit0 too.
+
+The bundle retains the source revision, Image/ELF/config/firmware hashes, both
+initramfs files, frozen guest/verifier sources, QEMU version, exact command,
+nonce, serial output, verifier output and both process exit statuses. A valid
+log without QEMU exit0 is
+not a pass. qemu_kexec_guest.py and qemu-kexec-target only run in the guest.
+
+Local checks are verifier fixtures and non-PID1 refusal checks, not runtime proof:
+
+  python3 -B -m unittest discover -s tools/testing/selftests/multikernel -p 'test_*.py'
+  bash -n tools/testing/selftests/multikernel/qemu_kexec_test.sh
+  sh -n tools/testing/selftests/multikernel/qemu-kexec-target
+
+Both native modes remain unqualified until matching fresh artifacts are booted
+and their retained evidence passes verify_kexec.py.
+
+Purgatory relocation regression check
+------------------------------------
+
+The independent kernel repair is tested without importing it into this test
+branch. Pass its source checkout explicitly (a 64-bit build host is required):
+
+  bash tools/testing/selftests/multikernel/purgatory_reloc_test.sh KERNEL_SOURCE
+
+This compiles the selected kernel's actual relocation handler against a small
+ELF fixture. It checks interleaved/reordered HI/LO references, multiple low users,
+I/S immediates, addends, section-relative/absolute symbols, displacement limits,
+two-byte instruction alignment, rejected matches and surrounding bytes. Run
+against the unchanged baseline as a negative control. Optional CC/CFLAGS allow
+Clang ASan/UBSan coverage. These are host-side C checks, not a purgatory boot or
+ordinary/crash kexec PASS; the separate fresh-build QEMU gates remain required.
+
+Command-line allocation cleanup (private test integration)
+--------------------------------------------------------
+
+Run qemu_lifecycle_test.sh with MODE=cmdline-cleanup, HARTS=1 or2, CYCLES=1,
+no alternate Image and FAULT=0. This extends the pinned #35 runtime; it adds no
+kernel hook or failure-injection interface. Only use a corrected kernel in the
+disposable QEMU guest, never the pre-fix kernel or the development host.
+
+The guest first submits one valid Image/initrd with a command-line length that
+excludes its terminating NUL. EINVAL alone is insufficient: an isolated tracefs
+instance must correlate memdup_user's return to kmalloc and exactly one kfree
+for that allocation epoch. A successful load retains the command line visibly
+in /proc/kimage until unload; its matching free must follow the unload boundary.
+Both operations leave no published Image and preserve assigned resources. The
+normal spawn/roundtrip/confirmed-stop sequence then proves subsequent recovery.
+
+The host VM alone receives no_hash_pointers to correlate native allocator events.
+This exposes VM kernel addresses in retained logs; do not use it on a real host
+or treat the logs as scrubbed. Tracing is PID1-filtered and bounded; per-CPU loss,
+missed return probes, missing allocation/free, premature free, unexplained
+duplicate frees, wrong scope or missing recovery fail verification. Reallocation
+of a freed address starts a different object epoch, not a second command-line
+free. Frozen guest helpers/verifiers are included in the bundle checksums.
+
+Local oracle/recipe tests do not qualify native cleanup. Native acceptance needs
+a fresh clean-source-bound build, matching firmware, QEMU exit0 and the frozen
+verify_cmdline.py result. No allocator tracing is enabled in production ranges.

@@ -16,6 +16,17 @@
 #include <linux/vmalloc.h>
 #include <linux/rcupdate.h>
 #include "internal.h"
+#ifdef MK_NATIVE_TEST_KERNEL
+#ifdef CONFIG_RISCV
+#include <asm/sbi.h>
+#endif
+#include "../../tools/testing/selftests/multikernel/native_resource_fault.h"
+static int __init mk_test_resource_setup(char *value)
+{
+	return kstrtobool(value, &mk_test_resource_trace) ? 0 : 1;
+}
+__setup("mk_test_resource_trace=", mk_test_resource_setup);
+#endif
 
 int mk_instance_idr_add(struct mk_instance *instance, int start, int end)
 {
@@ -233,6 +244,10 @@ static void mk_instance_free_boot_pages(struct mk_instance *instance)
 	if (!instance->manifest_phys)
 		return;
 
+#ifdef MK_NATIVE_TEST_KERNEL
+	mk_test_free(instance, "ring", instance->ipi_phys, instance->ipi_pages << PAGE_SHIFT);
+	mk_test_free(instance, "manifest", instance->manifest_phys, MK_MANIFEST_SIZE);
+#endif
 	__free_pages(phys_to_page(instance->ipi_phys),
 		     get_order(sizeof(struct mk_shared_data)));
 	__free_pages(phys_to_page(instance->manifest_phys),
@@ -429,6 +444,9 @@ void mk_instance_set_state(struct mk_instance *instance,
 		return;
 
 	instance->state = state;
+#ifdef MK_NATIVE_TEST_KERNEL
+	mk_test_snapshot(instance, "state");
+#endif
 	mk_instance_track_dump(instance, old_state, state);
 	pr_debug("Instance %d (%s) state: %s -> %s\n",
 		 instance->id, instance->name,
@@ -541,6 +559,9 @@ int mk_instance_confirm_parked(struct mk_instance *instance)
 	mk_phys_cpu_t phys_cpu;
 	unsigned int i;
 	int ret, failed = 0;
+#ifdef MK_NATIVE_TEST_KERNEL
+	mk_test_snapshot(instance, "confirm-enter");
+#endif
 
 	/* Ownership is authoritative; tracking may be incomplete after a failure. */
 	mk_cpu_set_for_each(i, phys_cpu, instance->cpus) {
@@ -565,6 +586,9 @@ int mk_instance_confirm_parked(struct mk_instance *instance)
 		}
 	}
 
+#ifdef MK_NATIVE_TEST_KERNEL
+	mk_test_snapshot(instance, "confirm-exit");
+#endif
 	return failed ? -EBUSY : 0;
 }
 
@@ -1385,6 +1409,9 @@ void mk_instance_free_memory(struct mk_instance *instance)
 			instance->ctrl_used = 0;
 		}
 
+#ifdef MK_NATIVE_TEST_KERNEL
+		mk_test_free(instance, "pool", 0, instance->pool_size);
+#endif
 		multikernel_destroy_instance_pool(instance->instance_pool);
 		instance->instance_pool = NULL;
 		instance->pool_size = 0;
@@ -1561,6 +1588,9 @@ void mk_instance_mem_free(struct mk_instance *instance, void *virt_addr, size_t 
 		return;
 
 	phys_addr = virt_to_phys(virt_addr);
+#ifdef MK_NATIVE_TEST_KERNEL
+	mk_test_free(instance, "allocation", phys_addr, size);
+#endif
 	multikernel_instance_free(instance->instance_pool, phys_addr, size);
 }
 

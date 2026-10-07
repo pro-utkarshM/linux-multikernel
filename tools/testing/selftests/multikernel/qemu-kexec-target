@@ -1,0 +1,48 @@
+#!/bin/sh
+# SPDX-License-Identifier: GPL-2.0-only
+# Minimal second kernel PID1; packaged by the unchanged #35 secondary helper.
+[ "$$" = 1 ] || { echo 'refusing operations outside guest PID1' >&2; exit 1; }
+set -efu
+PATH=/bin:/sbin
+export PATH
+mount -t proc proc /proc
+guard= stage= mode= token=
+for word in $(cat /proc/cmdline); do
+    case "$word" in
+        mk_kexec_guard=*) guard=${word#*=} ;;
+        mk_kexec_stage=*) stage=${word#*=} ;;
+        mk_kexec_mode=*) mode=${word#*=} ;;
+        mk_kexec_token=*) token=${word#*=} ;;
+    esac
+done
+[ "$guard" = vm-v1 ]
+[ "$stage" = target ]
+case "$mode" in ordinary|crash) ;; *) exit 1 ;; esac
+[ "${#token}" = 32 ]
+case "$token" in *[!0-9a-f]*) exit 1 ;; esac
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev
+boot=$(cat /proc/sys/kernel/random/boot_id)
+release=$(/bin/busybox uname -r)
+online=$(cat /sys/devices/system/cpu/online)
+vmcore_size=0
+vmcore_header=-
+if [ "$mode" = crash ]; then
+    [ "$online" = 0 ]
+    [ -r /proc/vmcore ]
+    vmcore_size=$(/bin/busybox stat -c '%s' /proc/vmcore)
+    vmcore_header=$(/bin/busybox od -An -v -tx1 -N64 /proc/vmcore |
+        /bin/busybox tr -d ' \n')
+    [ "$vmcore_size" -gt 64 ]
+    [ "${#vmcore_header}" = 128 ]
+else
+    [ "$online" = 0-3 ]
+    [ ! -e /proc/vmcore ]
+fi
+printf 'MK_KEXEC_TARGET {"mode":"%s","token":"%s","boot":"%s","release":"%s","online":"%s","vmcore_size":%s,"vmcore_header":"%s"}\n' \
+    "$mode" "$token" "$boot" "$release" "$online" "$vmcore_size" "$vmcore_header"
+printf 'MK_KEXEC_PASS {"mode":"%s","token":"%s","boot":"%s"}\n' "$mode" "$token" "$boot"
+sync
+/bin/busybox poweroff -f
+printf 'MK_KEXEC_FAIL {"error":"target poweroff returned"}\n'
+while :; do sleep 1; done

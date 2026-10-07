@@ -44,15 +44,38 @@ static int mk_riscv_setup_instance(struct mk_instance *instance)
 
 int mk_arch_prepare_instance(struct kimage *image, struct mk_instance *instance)
 {
-	return mk_riscv_setup_instance(instance);
+	int ret;
+
+	if (!instance->manifest_phys)
+		return -EINVAL;
+	ret = mk_riscv_setup_instance(instance);
+	if (!ret)
+		image->arch.fdt_addr = instance->manifest_phys;
+	return ret;
 }
 
 int mk_arch_manifest_chosen(void *fdt, struct kimage *image,
 			    struct mk_instance *instance)
 {
+	int ret;
+
 	if (!instance->arch.stub_phys)
 		return -EINVAL;
-	return fdt_property_u64(fdt, MK_FDT_ENTRY_STUB, instance->arch.stub_phys);
+	ret = fdt_property_u64(fdt, MK_FDT_ENTRY_STUB, instance->arch.stub_phys);
+	if (!ret && image->cmdline_buf && image->cmdline_buf_len)
+		ret = fdt_property(fdt, "bootargs", image->cmdline_buf,
+				   image->cmdline_buf_len);
+	if (!ret && image->arch.initrd_size) {
+		if (image->arch.initrd_size > ULONG_MAX - image->arch.initrd_start)
+			return -EOVERFLOW;
+		ret = fdt_property_u64(fdt, "linux,initrd-start",
+				       image->arch.initrd_start);
+		if (!ret)
+			ret = fdt_property_u64(fdt, "linux,initrd-end",
+					       image->arch.initrd_start +
+					       image->arch.initrd_size);
+	}
+	return ret;
 }
 
 static int mk_riscv_hart_stopped(unsigned long hartid)
@@ -113,12 +136,6 @@ static int mk_riscv_prime_icache(unsigned long hartid)
 	}
 
 	return mk_riscv_hart_stopped(hartid);
-}
-
-void mk_arch_send_ipi(mk_phys_cpu_t phys_cpu)
-{
-	/* Doorbell transport is the separate #28 series. */
-	pr_warn_once("RISC-V multikernel doorbells are not implemented\n");
 }
 
 void mk_arch_register_cpu(mk_phys_cpu_t phys_id)
