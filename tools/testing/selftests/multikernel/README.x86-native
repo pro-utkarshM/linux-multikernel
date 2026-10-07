@@ -213,6 +213,41 @@ CFLAGS=-DCONFIG_MK_X86_NATIVE_CONCURRENCY_TEST). These fixtures prove verifier
 and hook behavior, not native QEMU results. All new kernel observations stay
 private and must be excluded from production submission ranges.
 
+Real mailbox timeout (private test branch only)
+---------------------------------------------
+Use the same clean-source halt bundle and six-CPU q35 command with
+CONFIG_MK_X86_NATIVE_CONFIRM_TEST=y. Append HOST
+mk_native_confirm_test=1 mk_x86_halt=mailbox-timeout, and replay the frozen
+verify_x86_child.py with --halt=mailbox-timeout and the exact build revision.
+Use a fresh disposable VM; the timeout deliberately quarantines its pool.
+
+After both child CPUs boot and a nonce reply arrives, the opt-in debugfs probe
+calls the real mk_arch_confirm_parked on the last assigned physical CPU. That
+CPU is running the child, not reading the mailbox: publication and the native
+one-second timeout must execute. The early fail_cpu selector remains disabled
+and its counter zero. No test hook changes a mailbox state or fakes a timeout.
+Under the resource mutex, the one-shot probe records the actual result, elapsed
+time, immediate confirm retry and repark result. The latter two must be EBUSY.
+The separate read-only snapshot exposes native selected/pool state, tracking,
+slot/park/page-table identities; it does not change the older allocation ABI.
+
+The verifier requires the native timeout printk for that CPU and slot, both
+slots QUARANTINED, unchanged tracking, and a fresh child lockdep reply AFTER
+timeout. The host closes its MKTTY reference, then attempts execute, unload
+and destruction. All must refuse with EBUSY, with a matching failed overlay
+transaction. ACTIVE ownership and all Image/ring/control/context/pool/park
+identities remain unchanged. Host live lockdep and boot identity are checked.
+No force-stop, reset, recovery, HALTED publication or reclamation is permitted;
+only the final host poweroff ends the VM with resources retained.
+
+Run mailbox_probe_test.sh and test_verify_x86_child.py before the native lane.
+The former executes probe admission against modeled architecture calls/time;
+the latter tests verifier acceptance and rejection, not a live timeout. Native
+success qualifies only this running-child nonresponse path. It does not prove
+a late-ACK race, a nested child's distinct own-slot propagation, successful
+handback after quarantine, continuous lockdep health, or physical retirement.
+All instrumentation remains private; production mailbox logic is unchanged.
+
 Kernfs snapshot exclusion and normal removal (test-only acceptance)
 -----------------------------------------------------------------
 Reuse --profile=admission and --profile=destroy with their existing eight-CPU

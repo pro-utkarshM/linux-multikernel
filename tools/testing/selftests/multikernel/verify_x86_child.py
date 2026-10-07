@@ -8,10 +8,75 @@ from pathlib import Path
 import re
 import subprocess
 import uuid
-from x86_lockdep import REQUIRED_CONFIG, verify_boundaries
+from x86_lockdep import REQUIRED_CONFIG, decode_record, verify_boundaries
 
 HALT_MODES = ('requested', 'force', 'halt', 'poweroff', 'reboot')
-HALT_LANES = HALT_MODES + tuple(mode + '-retain' for mode in HALT_MODES)
+HALT_LANES = HALT_MODES + tuple(mode + '-retain' for mode in HALT_MODES) + ('mailbox-timeout',)
+
+
+def verify_mailbox(trace, events, positions, child, nonce):
+    errors = []
+    if re.search(r'MK_X86_TEST_CONFIRM_FAIL|MK_X86_CONFIRM_FAULT_CLEAR|Sent NMI'
+                 r'|all CPUs confirmed parked|MK_X86_(?:HALTED|UNLOADED|RETAINED) ', trace):
+        errors.append('mailbox timeout lane contains injection, recovery or reclamation')
+    try:
+        before, after = events['MAILBOX_BEFORE'], events['MAILBOX_RETAINED']
+        old, new = before['mailbox'], after['mailbox']
+        allocations = before['allocations']
+        for sample in (before, after):
+            if (sample['allocations'] != allocations or sample['owned_cpus'] != child
+                    or type(sample['fail_cpu']) is not int or sample['fail_cpu'] != 2**64-1
+                    or type(sample['failures']) is not int or sample['failures'] != 0):
+                errors.append('allocations/ownership changed or early failure injection enabled')
+        pointers = ('image', 'ring', 'ring_phys', 'control', 'context', 'pool')
+        if (allocations['state'] != 3 or allocations['pool_size'] != 536870912
+                or any(not isinstance(allocations[key], str)
+                       or not re.fullmatch(r'[0-9a-fA-F]+', allocations[key])
+                       or not int(allocations[key], 16) for key in pointers)):
+            errors.append('active Image, ring, control or pool allocation missing')
+        initial = dict(used=0, cpu=2**64-1, result=0, retry=0, repark=0,
+                       elapsed_us=0, selected_state=0, pool_state=0, tracked=0, tracked_count=2)
+        expected = dict(used=1, result=-110, retry=-16, repark=-16,
+                        selected_state=4, pool_state=4, tracked=1, tracked_count=2)
+        for record, fields in ((old, initial), (new, expected)):
+            if any(type(record[key]) is not int or record[key] != value
+                   for key, value in fields.items()):
+                errors.append('mailbox admission, quarantine, tracking or native refusal mismatch')
+        if (type(new['cpu']) is not int or new['cpu'] not in child
+                or type(new['elapsed_us']) is not int
+                or not 1_000_000 <= new['elapsed_us'] <= 30_000_000):
+            errors.append('wrong physical CPU or native timeout not observed')
+        for key in ('instance_slot', 'instance_park', 'pool_slot', 'pool_park', 'pool_cr3'):
+            if (not isinstance(old[key], str) or not re.fullmatch(r'[0-9a-fA-F]+', old[key])
+                    or not int(old[key], 16) or new[key] != old[key]):
+                errors.append('mailbox allocation changed or missing: ' + key)
+        if (old['instance_slot'] != allocations['context']
+                or events['MAILBOX_TIMEOUT']['mailbox'] != new
+                or events['MAILBOX_TIMEOUT']['nonce'] != nonce
+                or events['CONSOLE_CLOSED']['nonce'] != nonce):
+            errors.append('mailbox result not correlated or not retained')
+        native = list(re.finditer(
+            r'mk_spawn: confirm parked: CPU \(APIC ([0-9]+)\) unconfirmed on slot '
+            r'((?:0x)?[0-9a-fA-F]+); quarantined until host reboot', trace))
+        if (len(native) != 1 or not positions[4] < native[0].start() < positions[5]
+                or int(native[0][1]) != new['cpu']
+                or int(native[0][2], 16) != int(new['instance_slot'], 16)):
+            errors.append('no unique native mailbox timeout for the selected CPU/slot')
+        transaction = after['destroy_transaction']
+        refusal = list(re.finditer(r'Overlay tx' + re.escape(str(transaction))
+                                  + r": Failed to remove instance 'native-child': -16\b", trace))
+        if (type(transaction) is not int or transaction <= 0 or len(refusal) != 1
+                or not positions[6] < refusal[0].start() < positions[7]
+                or after['status'] != 'active' or after['destroy_status'] != 'failed'
+                or type(after['exec_errno']) is not int or after['exec_errno'] != 16
+                or type(after['unload_errno']) is not int or after['unload_errno'] != 16):
+            errors.append('execute/unload/destruction refusal not established')
+    except (KeyError, ValueError, TypeError, AttributeError):
+        errors.append('invalid mailbox timeout evidence')
+    if (events['HOST_SURVIVED'].get('online') != '0-1'
+            or events['PASS'].get('slice') != 'mailbox-timeout-retention'):
+        errors.append('host topology or mailbox qualification slice mismatch')
+    return errors
 
 
 def verify(trace, halt='requested', expected_revision=None):
@@ -19,9 +84,15 @@ def verify(trace, halt='requested', expected_revision=None):
         return ['unsupported halt lane']
     mode = halt.removesuffix('-retain')
     retaining = halt.endswith('-retain')
-    errors = verify_boundaries(trace, 'BEGIN', 'HOST_SURVIVED', 'CHILD_REPLY')
+    mailbox = halt == 'mailbox-timeout'
+    errors = verify_boundaries(trace, 'BEGIN', 'HOST_SURVIVED',
+                               'MAILBOX_TIMEOUT' if mailbox else 'CHILD_REPLY',
+                               terminal=mailbox, before='CONSOLE_CLOSED' if mailbox else None)
     names = ('BEGIN', 'CHILD_ALIVE', 'PING', 'CHILD_REPLY', 'HALTED',
              'UNLOADED', 'HOST_SURVIVED', 'PASS')
+    if mailbox:
+        names = ('BEGIN', 'CHILD_ALIVE', 'PING', 'CHILD_REPLY', 'MAILBOX_BEFORE',
+                 'MAILBOX_TIMEOUT', 'CONSOLE_CLOSED', 'MAILBOX_RETAINED', 'HOST_SURVIVED', 'PASS')
     events = {}
     positions = []
     if re.search(r'MK_X86_FAIL|Kernel panic - not syncing:|WARNING:|BUG:|Oops:'
@@ -36,9 +107,7 @@ def verify(trace, halt='requested', expected_revision=None):
             continue
         positions.append(matches[0].start())
         try:
-            event = json.loads(matches[0][1])
-            if not isinstance(event, dict):
-                raise ValueError('event is not an object')
+            event = decode_record(matches[0][1])
             events[name] = event
         except (ValueError, TypeError):
             errors.append(f'{name}: invalid JSON event')
@@ -75,6 +144,10 @@ def verify(trace, halt='requested', expected_revision=None):
     if (not isinstance(nonce, str) or not re.fullmatch(r'[0-9a-f]{16}', nonce)
             or events['CHILD_REPLY'].get('nonce') != nonce):
         errors.append('missing fresh correlated child reply')
+    if mailbox:
+        if errors:
+            return errors
+        return verify_mailbox(trace, events, positions, groups[1], nonce)
     confirm = trace.find('Instance 1 (native-child) halted, all CPUs confirmed parked')
     if confirm < positions[3] or confirm >= positions[4]:
         errors.append('no native all-CPU parked confirmation before settlement')
@@ -212,7 +285,10 @@ def main():
     for error in errors:
         print('FAIL:', error)
     if not errors:
-        print(f'PASS: executing-child {args.halt} halt; worker/lifetime races not qualified')
+        if args.halt == 'mailbox-timeout':
+            print('PASS: real mailbox timeout retained resources; recovery/reclamation not qualified')
+        else:
+            print(f'PASS: executing-child {args.halt} halt; worker/lifetime races not qualified')
     return bool(errors)
 
 

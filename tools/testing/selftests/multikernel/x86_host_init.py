@@ -7,6 +7,7 @@ This slice is not worker/IRQ-lifetime concurrency qualification.
 """
 import ctypes
 import errno
+import importlib
 import json
 import os
 from pathlib import Path
@@ -18,13 +19,14 @@ import sys
 import termios
 import time
 sys.path.insert(0, '/usr/lib/python3/dist-packages')
-from x86_lockdep import read_debug_locks, probe_child
+from x86_lockdep import decode_record, read_debug_locks, probe_child
 from x86_shutdown import MODES as REJECTION_MODES
 
 BASE = Path('/sys/fs/multikernel')
 NAME = 'native-child'
 HALT_MODES = ('requested', 'force', 'halt', 'poweroff', 'reboot')
-HALT_LANES = HALT_MODES + tuple(mode + '-retain' for mode in HALT_MODES) + REJECTION_MODES
+HALT_LANES = (HALT_MODES + tuple(mode + '-retain' for mode in HALT_MODES)
+              + REJECTION_MODES + ('mailbox-timeout',))
 
 
 def require_qemu(identity=Path('/sys/class/dmi/id')):
@@ -185,6 +187,57 @@ def failed_retention(child, console, mode):
     halt_multikernel(1, force=True)
 
 
+def mailbox_timeout(fd, pending, nonce, child):
+    """Real confirm timeout on a running child; retain everything until VM exit."""
+    from kerf.unload.main import kexec_file_unload, KEXEC_FILE_UNLOAD
+    from kerf.load.main import KEXEC_MULTIKERNEL, KEXEC_MK_ID
+    boot_multikernel = importlib.import_module('kerf.exec.main').boot_multikernel
+    fault = Path('/sys/kernel/debug/mk-native-confirm-test')
+
+    def snapshot():
+        return dict(allocations=decode_record((fault / 'snapshot').read_text()),
+                    owned_cpus=ownership(), fail_cpu=int((fault / 'fail_cpu').read_text()),
+                    failures=int((fault / 'failures').read_text()))
+
+    try:
+        before = snapshot()
+        if (before['fail_cpu'] != 2**64-1 or before['failures'] != 0
+                or before['allocations']['state'] != 3 or before['owned_cpus'] != child):
+            raise RuntimeError('not an active uninjected instance')
+        marker('MAILBOX_BEFORE', **before, mailbox=decode_record((fault / 'mailbox').read_text()))
+        # The child is alive, not executing its host mailbox reader. Do not
+        # inject an early return: wait for the real publication/poll timeout.
+        (fault / 'probe').write_text(str(child[-1]) + '\n')
+        result = decode_record((fault / 'mailbox').read_text())
+        if (result['result'] != -errno.ETIMEDOUT or result['retry'] != -errno.EBUSY
+                or result['repark'] != -errno.EBUSY):
+            raise RuntimeError('native timeout and sticky quarantine refusal missing')
+        marker('MAILBOX_TIMEOUT', nonce=nonce, mailbox=result)
+        pending = probe_child(fd, pending, nonce)
+        pending = capture_tail(fd, pending)
+        if pending:
+            raise RuntimeError('incomplete child diagnostics after mailbox timeout')
+    finally:
+        os.close(fd)
+    marker('CONSOLE_CLOSED', nonce=nonce)
+    status('active')
+    exec_errno = rejected(lambda: boot_multikernel(1))
+    unload_errno = rejected(lambda: kexec_file_unload(
+        KEXEC_MULTIKERNEL | KEXEC_MK_ID(1) | KEXEC_FILE_UNLOAD))
+    destroy_transaction, destroy_status = destroy()
+    after = snapshot()
+    mailbox = decode_record((fault / 'mailbox').read_text())
+    if after != before or mailbox != result:
+        raise RuntimeError('mailbox quarantine changed ownership or retained allocations')
+    marker('MAILBOX_RETAINED', **after, mailbox=mailbox, status=status('active'),
+           exec_errno=exec_errno, unload_errno=unload_errno,
+           destroy_transaction=destroy_transaction, destroy_status=destroy_status)
+    marker('HOST_SURVIVED', debug_locks=read_debug_locks(),
+           online=Path('/sys/devices/system/cpu/online').read_text().strip(),
+           boot_id=Path('/proc/sys/kernel/random/boot_id').read_text().strip())
+    marker('PASS', slice='mailbox-timeout-retention')
+
+
 def workload():
     from kerf.topology import logical_to_apic
     options = dict(arg.split('=', 1) for arg in Path('/proc/cmdline').read_text().split()
@@ -252,6 +305,10 @@ def workload():
         if options.get('mk_x86_reonline') == '1':
             from x86_reonline import host_probe
             pending = host_probe(fd, pending, nonce, marker)
+        if halt == 'mailbox-timeout':
+            console, fd = fd, -1
+            mailbox_timeout(console, pending, nonce, child)
+            return
         pending = probe_child(fd, pending, nonce)
         if halt in REJECTION_MODES:
             from x86_shutdown import host_terminate

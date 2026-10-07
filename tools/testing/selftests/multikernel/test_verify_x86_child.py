@@ -50,6 +50,89 @@ class X86ChildGate(unittest.TestCase):
     def test_complete_boot_gate_is_accepted(self):
         self.assertEqual(self.verify(''.join(self.trace())), [])
 
+    def mailbox_trace(self):
+        def event(name, **fields):
+            return 'MK_X86_' + name + ' ' + json.dumps(fields) + '\n'
+        allocation = dict(image='1000', ring='2000', ring_phys='3000',
+                          control='4000', context='5000', pool='6000',
+                          pool_size=536870912, state=3)
+        before = dict(used=0, cpu=2**64-1, result=0, retry=0, repark=0, elapsed_us=0,
+                      selected_state=0, pool_state=0, tracked=0, tracked_count=2,
+                      instance_slot='5000', instance_park='7000',
+                      pool_slot='8000', pool_park='9000', pool_cr3='a000')
+        after = dict(before, used=1, cpu=3, result=-110, retry=-16, repark=-16,
+                     elapsed_us=1000010, selected_state=4, pool_state=4, tracked=1)
+        sample = dict(allocations=allocation, owned_cpus=[2, 3], fail_cpu=2**64-1,
+                      failures=0)
+        trace = self.trace()
+        return ''.join(trace[:4]) + ''.join([
+            event('MAILBOX_BEFORE', **sample, mailbox=before),
+            'mk_spawn: confirm parked: CPU (APIC 3) unconfirmed on slot 0x00005000; quarantined until host reboot\n',
+            event('MAILBOX_TIMEOUT', nonce='1234567890abcdef', mailbox=after),
+            trace[4].split('Instance 1')[0],
+            event('CONSOLE_CLOSED', nonce='1234567890abcdef'),
+            "Overlay tx3: Failed to remove instance 'native-child': -16\n",
+            event('MAILBOX_RETAINED', **sample, mailbox=after, status='active',
+                  exec_errno=16, unload_errno=16, destroy_status='failed', destroy_transaction=3),
+            trace[7], event('PASS', slice='mailbox-timeout-retention'),
+        ])
+
+    def test_real_mailbox_timeout_is_accepted_without_reclamation(self):
+        self.assertEqual(self.verify(self.mailbox_trace(), halt='mailbox-timeout'), [])
+
+    def test_mailbox_gate_rejects_early_injection_or_missing_quarantine(self):
+        for old, new in (('"selected_state": 4', '"selected_state": 0'),
+                         ('"pool_state": 4', '"pool_state": 0'),
+                         ('"elapsed_us": 1000010', '"elapsed_us": 1'),
+                         ('"result": -110', '"result": 0'),
+                         ('"retry": -16', '"retry": 0'),
+                         ('"repark": -16', '"repark": 0'),
+                         ('"tracked": 1', '"tracked": 0'),
+                         ('"tracked_count": 2', '"tracked_count": 1'),
+                         ('"failures": 0', '"failures": 1'),
+                         ('"exec_errno": 16', '"exec_errno": 0'),
+                         ('"context": "5000"', '"context": "0"'),
+                         ('"pool_park": "9000"', '"pool_park": "0"'),
+                         ('CPU (APIC 3)', 'CPU (APIC 2)'),
+                         ('slot 0x00005000', 'slot 0x00008000')):
+            with self.subTest(new=new):
+                self.assertTrue(self.verify(self.mailbox_trace().replace(old, new),
+                                            halt='mailbox-timeout'))
+        trace = self.mailbox_trace()
+        for line in trace.splitlines(keepends=True):
+            if line.startswith(('MK_X86_MAILBOX_', 'mk_spawn:', 'MK_X86_CONSOLE_CLOSED')):
+                self.assertTrue(self.verify(trace.replace(line, ''), halt='mailbox-timeout'))
+                self.assertTrue(self.verify(trace + line, halt='mailbox-timeout'))
+
+    def test_mailbox_gate_rejects_recovery_and_changed_allocations(self):
+        trace = self.mailbox_trace()
+        for extra in ('MK_X86_TEST_CONFIRM_FAIL phys=3\n',
+                      'Instance 1 (native-child) halted, all CPUs confirmed parked\n',
+                      'Sent NMI to 2 CPUs in instance 1\n', 'MK_X86_UNLOADED {}\n'):
+            self.assertTrue(self.verify(trace + extra, halt='mailbox-timeout'))
+        lines = trace.splitlines(keepends=True)
+        retained = next(line for line in lines if line.startswith('MK_X86_MAILBOX_RETAINED '))
+        for old, new in (('"image": "1000"', '"image": "1001"'),
+                         ('"pool_slot": "8000"', '"pool_slot": "8001"')):
+            self.assertTrue(self.verify(trace.replace(retained, retained.replace(old, new)),
+                                        halt='mailbox-timeout'))
+        sample = next(line for line in lines if line.startswith('MK_X86_CHILD_LOCKDEP_FINAL '))
+        self.assertTrue(self.verify(sample + trace.replace(sample, ''), halt='mailbox-timeout'))
+
+    def test_mailbox_gate_rejects_malformed_or_uncorrelated_records(self):
+        trace = self.mailbox_trace()
+        for old, new in (('"used": 1', '"used": true'),
+                         ('"used": 1', '"used": 0, "used": 1'),
+                         ('"cpu": 3', '"cpu": "3"'),
+                         ('"elapsed_us": 1000010', '"elapsed_us": 31000000'),
+                         ('"mailbox": {', '"mailbox": null, "invalid": {'),
+                         ('"destroy_transaction": 3', '"destroy_transaction": 4'),
+                         ('"instance_park": "7000"', '"instance_park": "not-hex"'),
+                         ('MK_X86_CONSOLE_CLOSED {"nonce": "1234567890abcdef"}',
+                          'MK_X86_CONSOLE_CLOSED {"nonce": "ffffffffffffffff"}')):
+            with self.subTest(new=new):
+                self.assertTrue(self.verify(trace.replace(old, new), halt='mailbox-timeout'))
+
     def test_pre_spawn_smoke_is_not_native_child_proof(self):
         self.assertTrue(self.verify('MK_ADAPTER_SMOKE_PASS secondary_started=False\n'))
 
