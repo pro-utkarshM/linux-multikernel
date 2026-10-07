@@ -412,3 +412,31 @@ two-byte instruction alignment, rejected matches and surrounding bytes. Run
 against the unchanged baseline as a negative control. Optional CC/CFLAGS allow
 Clang ASan/UBSan coverage. These are host-side C checks, not a purgatory boot or
 ordinary/crash kexec PASS; the separate fresh-build QEMU gates remain required.
+
+Command-line allocation cleanup (private test integration)
+--------------------------------------------------------
+
+Run qemu_lifecycle_test.sh with MODE=cmdline-cleanup, HARTS=1 or2, CYCLES=1,
+no alternate Image and FAULT=0. This extends the pinned #35 runtime; it adds no
+kernel hook or failure-injection interface. Only use a corrected kernel in the
+disposable QEMU guest, never the pre-fix kernel or the development host.
+
+The guest first submits one valid Image/initrd with a command-line length that
+excludes its terminating NUL. EINVAL alone is insufficient: an isolated tracefs
+instance must correlate memdup_user's return to kmalloc and exactly one kfree
+for that allocation epoch. A successful load retains the command line visibly
+in /proc/kimage until unload; its matching free must follow the unload boundary.
+Both operations leave no published Image and preserve assigned resources. The
+normal spawn/roundtrip/confirmed-stop sequence then proves subsequent recovery.
+
+The host VM alone receives no_hash_pointers to correlate native allocator events.
+This exposes VM kernel addresses in retained logs; do not use it on a real host
+or treat the logs as scrubbed. Tracing is PID1-filtered and bounded; per-CPU loss,
+missed return probes, missing allocation/free, premature free, unexplained
+duplicate frees, wrong scope or missing recovery fail verification. Reallocation
+of a freed address starts a different object epoch, not a second command-line
+free. Frozen guest helpers/verifiers are included in the bundle checksums.
+
+Local oracle/recipe tests do not qualify native cleanup. Native acceptance needs
+a fresh clean-source-bound build, matching firmware, QEMU exit0 and the frozen
+verify_cmdline.py result. No allocator tracing is enabled in production ranges.

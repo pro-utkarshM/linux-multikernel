@@ -216,7 +216,7 @@ def main():
     assert mode in ('graceful', 'halt', 'poweroff', 'reboot', 'panic-retain', 'contended-retain',
                     'deny-primary', 'partial-start', 'stuck-stop', 'loader-negative',
                     'failed-retain', 'lost-ack', 'writer-stress',
-                    'manifest-prepare', 'manifest-capacity', 'placement-negative')
+                    'manifest-prepare', 'manifest-capacity', 'placement-negative', 'cmdline-cleanup')
     placement_negative = mode == 'placement-negative'
     manifest_fault = {'manifest-prepare': (1, errno.ENOMEM),
                       'manifest-capacity': (2, errno.ENOSPC)}.get(mode)
@@ -225,7 +225,7 @@ def main():
     if mode in ('deny-primary', 'partial-start', 'stuck-stop'):
         assert harts == 2 and cycles == 1 and images == 'same'
         assert fault in {'deny-primary': (1, 2, 3, 4), 'partial-start': (5,), 'stuck-stop': (7,)}[mode]
-    if mode == 'loader-negative':
+    if mode in ('loader-negative', 'cmdline-cleanup'):
         assert cycles == 1 and images == 'same' and fault == 0
     if manifest_fault:
         assert cycles == 1 and images == 'same' and fault == 0
@@ -277,6 +277,10 @@ def main():
     marker('BEGIN', mode=mode, harts=ids, cycles=cycles, host_boot=host_boot, images=images, fault=fault)
     cli('init', '--cpus=' + ','.join(map(str, ids)), '--memory=512MB', '--devices=none')
     cli('create', 'lifecycle-test', '--id=1', '--cpus=' + ','.join(map(str, ids)), '--memory=256MB')
+    if mode == 'cmdline-cleanup':
+        sys.path.insert(0, '/payload')
+        from cmdline_trace import run as check_cmdline
+        check_cmdline(trace_dir, Path('/payload/vmlinux'), host_boot, status, register_probe, marker)
     if mode in ('failed-retain', 'lost-ack', 'panic-retain', 'contended-retain'):
         sys.path.insert(0, '/payload')
         from verify_retention import (resources, release_control, loaded_extents,
@@ -641,7 +645,7 @@ def main():
                 retain('active', before, positive_trace, ownership_before)
                 return
             trace.write_text('\n')
-            if mode in ('graceful', 'partial-start', 'stuck-stop', 'loader-negative', 'writer-stress') or manifest_fault or placement_negative:
+            if mode in ('graceful', 'partial-start', 'stuck-stop', 'loader-negative', 'writer-stress', 'cmdline-cleanup') or manifest_fault or placement_negative:
                 if mode == 'stuck-stop':
                     require_errno(lambda: halt_multikernel(1), errno.EBUSY)
                     assert status() == 'active'

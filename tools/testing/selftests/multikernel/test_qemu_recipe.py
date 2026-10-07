@@ -44,7 +44,9 @@ class Recipe(unittest.TestCase):
                                            ('panic-retain', 2, 2, 0), ('panic-retain', 2, 1, 7),
                                            ('lost-ack', 2, 2, 0), ('lost-ack', 2, 1, 8),
                                            ('contended-retain', 1, 1, 0), ('contended-retain', 2, 2, 0),
-                                           ('contended-retain', 2, 1, 7)):
+                                           ('contended-retain', 2, 1, 7),
+                                           ('cmdline-cleanup', 1, 2, 0),
+                                           ('cmdline-cleanup', 2, 1, 7)):
             result = subprocess.run(['bash', str(runner), *(['/not-used'] * 6), mode,
                                      str(harts), str(cycles), '', str(fault)], capture_output=True)
             self.assertEqual(result.returncode, 2, result.stderr.decode())

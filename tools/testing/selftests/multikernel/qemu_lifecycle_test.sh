@@ -19,7 +19,7 @@ fault=${11:-0}
 case "$mode" in
     graceful|halt|poweroff|reboot|panic-retain|contended-retain|deny-primary|partial-start|stuck-stop|\
     loader-negative|failed-retain|lost-ack|writer-stress|manifest-prepare|\
-    manifest-capacity|placement-negative) ;;
+    manifest-capacity|placement-negative|cmdline-cleanup) ;;
     *) exit 2 ;;
 esac
 [[ "$fault" =~ ^[0-8]$ ]] || exit 2
@@ -35,7 +35,7 @@ case "$mode" in
     manifest-prepare) manifest_fault=1 ;;
     manifest-capacity) manifest_fault=2 ;;
 esac
-if (( manifest_fault )) || [[ "$mode" == placement-negative ]]; then
+if (( manifest_fault )) || [[ "$mode" == placement-negative || "$mode" == cmdline-cleanup ]]; then
     (( cycles == 1 && fault == 0 )) && test -z "$alternate_build" || exit 2
 fi
 placement_arg=
@@ -70,12 +70,17 @@ install -m 0644 "$test_dir/verify_loader.py" "$bundle/verify_loader.py"
 install -m 0644 "$test_dir/verify_manifest.py" "$bundle/verify_manifest.py"
 install -m 0644 "$test_dir/verify_placement.py" "$bundle/verify_placement.py"
 install -m 0644 "$test_dir/verify_retention.py" "$bundle/verify_retention.py"
+install -m 0644 "$test_dir/verify_cmdline.py" "$bundle/verify_cmdline.py"
+install -m 0644 "$test_dir/cmdline_trace.py" "$bundle/cmdline_trace.py"
 printf '%s\n' "$revision" > "$bundle/kernel-revision.txt"
 # Avoid merging /bin symlinks over the original harness's BusyBox directory.
 mkdir "$bundle/runtime-view"
 cp -a "$runtime/usr" "$runtime/lib" "$bundle/runtime-view/"
 mkdir "$bundle/runtime-view/payload"
 install -m 0644 "$bundle/verify_retention.py" "$bundle/runtime-view/payload/verify_retention.py"
+for script in cmdline_trace.py verify_cmdline.py verify_lifecycle.py; do
+    install -m 0644 "$bundle/$script" "$bundle/runtime-view/payload/$script"
+done
 install -m 0644 "$kernel_build/include/config/kernel.release" "$bundle/runtime-view/payload/vmlinux.release"
 if test -n "$alternate_build"; then
     (( cycles >= 2 ))
@@ -102,13 +107,14 @@ bash "$harness/scripts/build-initramfs.sh" host "$bundle/host-initrd.cpio.gz" \
     sha256sum Image vmlinux.unstripped kernel.config fw_dynamic.bin guest-host.py guest-child \
         host-initrd.cpio.gz secondary-initrd.cpio.gz verify_lifecycle.py verify_fault.py \
         verify_pending.py verify_loader.py verify_manifest.py verify_placement.py \
-        verify_retention.py \
+        verify_retention.py verify_cmdline.py cmdline_trace.py \
         qemu-version.txt clang-version.txt harness-revision.txt kerf-revision.txt > SHA256SUMS
     if test -n "$alternate_build"; then
         sha256sum Image-alt vmlinux-alt.unstripped >> SHA256SUMS
     fi
 )
 cmdline="console=ttyS0,115200 rdinit=/init panic=0 kernelcore=1G log_buf_len=4M"
+[[ "$mode" != cmdline-cleanup ]] || cmdline+=' no_hash_pointers'
 cmdline+=" mk_test_resource_trace=1 mk_test_manifest_fault=$manifest_fault$placement_arg"
 cmdline+=" mk_test_drop_shutdown_ack=$([[ $mode == lost-ack ]] && echo 1 || echo 0)"
 cmdline+=" mk_lifecycle_guard=modern-v5 mk_lifecycle_mode=$mode mk_lifecycle_harts=$harts"
@@ -128,6 +134,8 @@ case "$mode" in
         python3 "$bundle/verify_retention.py" "$bundle/serial.log" "$rc" "$mode" "$fault" ;;
     loader-negative)
         python3 "$bundle/verify_loader.py" "$bundle/serial.log" "$rc" "$harts" ;;
+    cmdline-cleanup)
+        python3 "$bundle/verify_cmdline.py" "$bundle/serial.log" "$rc" "$harts" ;;
     manifest-prepare|manifest-capacity)
         python3 "$bundle/verify_manifest.py" "$bundle/serial.log" "$rc" "$mode" "$harts" ;;
     placement-negative)
