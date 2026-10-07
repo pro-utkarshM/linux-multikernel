@@ -41,6 +41,18 @@ static struct {
 } smp_ops;
 static bool native_hotplug_disabled;
 static unsigned int notices, remote_parks, failures;
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+static unsigned int observations;
+static bool observed_notify, observed_panic, observed_kexec, observed_busy;
+static inline void mk_native_shutdown_busy(void) { observed_busy = true; }
+static inline void mk_native_shutdown_observe(bool notify, bool panic, bool kexec)
+{
+	observations++;
+	observed_notify = notify;
+	observed_panic = panic;
+	observed_kexec = kexec;
+}
+#endif
 static jmp_buf parked;
 static struct {
 	int id;
@@ -161,6 +173,13 @@ int main(int argc, char **argv)
 	expect("local stop retains remote parking", remote_parks == 1);
 	expect("only qualified normal exit sends HALTED",
 	       notices == (unsigned int)qualified);
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	expect("terminal observer matches actual notification", observations == 1 &&
+	       observed_notify == qualified && observed_panic == panic_now &&
+	       observed_kexec == kexec_in_progress);
+	expect("observer identifies real trylock refusal",
+	       observed_busy == !strcmp(mode, "busy"));
+#endif
 	printf("voluntary shutdown %s: %u failures\n", mode, failures);
 	return failures ? 1 : 0;
 }

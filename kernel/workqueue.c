@@ -33,6 +33,9 @@
 #include <linux/signal.h>
 #include <linux/completion.h>
 #include <linux/workqueue.h>
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+#include <asm/multikernel_test.h>
+#endif
 #include <linux/slab.h>
 #include <linux/cpu.h>
 #include <linux/notifier.h>
@@ -4337,6 +4340,10 @@ static bool __flush_work(struct work_struct *work, bool from_cancel)
 		}
 	}
 
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	mk_native_tty_flush_barrier(work, &barr.done);
+	mk_native_spawn_tty_barrier(work, &barr.done, from_cancel);
+#endif
 	wait_for_completion(&barr.done);
 
 out_destroy:

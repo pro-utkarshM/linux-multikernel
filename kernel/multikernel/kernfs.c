@@ -28,6 +28,9 @@
 #include <linux/libfdt.h>
 #include <linux/sizes.h>
 #include "internal.h"
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+#include <asm/multikernel_test.h>
+#endif
 
 #define MULTIKERNEL_MAGIC	0x6d6b6673	/* "mkfs" */
 
@@ -448,6 +451,9 @@ int mk_instance_destroy(struct mk_instance *instance)
 
 	list_del(&instance->list);
 	mk_instance_idr_remove(instance->id);
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	mk_native_destroy_boundary((unsigned long)instance, 4);
+#endif
 	mutex_unlock(&mk_instance_mutex);
 
 	if (instance->kn) {
@@ -457,6 +463,9 @@ int mk_instance_destroy(struct mk_instance *instance)
 	}
 	/* Permit later fragments of this same overlay to reuse its resources. */
 	mk_instance_retire_resources(instance);
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	mk_native_destroy_retired(instance);
+#endif
 	mk_instance_put(instance);
 	mutex_lock(&mk_instance_mutex);
 

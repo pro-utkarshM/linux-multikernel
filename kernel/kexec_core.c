@@ -48,6 +48,9 @@
 #include <linux/dma-map-ops.h>
 #include <linux/sysfs.h>
 #include <linux/memblock.h>
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+#include <asm/multikernel_test.h>
+#endif
 
 #include <asm/page.h>
 #include <asm/sections.h>
@@ -630,6 +633,10 @@ void kimage_free_multikernel(struct kimage *image)
 	for (i = 0; i < image->nr_segments; i++)
 		mk_kimage_free(image, phys_to_virt(image->segment[i].mem),
 			       image->segment[i].memsz);
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	mk_native_writer_segments(instance, image);
+	mk_native_destroy_boundary((unsigned long)instance, 3);
+#endif
 
 	/* Load-time buffers were kept as the source for each spawn */
 	kimage_file_post_load_cleanup(image);

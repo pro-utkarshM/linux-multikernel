@@ -30,6 +30,9 @@
 #include <linux/tty_flip.h>
 #include <linux/tty_ldisc.h>
 #include <linux/multikernel.h>
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+#include <asm/multikernel_test.h>
+#endif
 
 #define MKTTY_IPI_TYPE		0x4D4B5459U	/* "MKTY" */
 #define MKTTY_MAX_DATA		(MK_MAX_DATA_SIZE - 16)
@@ -86,6 +89,9 @@ static void mktty_host_wake_work(struct work_struct *work)
 							  wake_work);
 	unsigned long flags;
 	bool readable;
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	bool observed = mk_native_tty_worker(conn);
+#endif
 
 	/* Pair with RX publication even when queue_work coalesces an enqueue. */
 	raw_spin_lock_irqsave(&conn->rx_lock, flags);
@@ -93,6 +99,10 @@ static void mktty_host_wake_work(struct work_struct *work)
 	raw_spin_unlock_irqrestore(&conn->rx_lock, flags);
 	if (readable)
 		wake_up_interruptible(&conn->wait);
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	if (observed)
+		mk_native_tty_boundary((unsigned long)conn, 13);
+#endif
 }
 
 static int mktty_host_open(struct inode *inode, struct file *filp)
@@ -129,15 +139,34 @@ static int mktty_host_release(struct inode *inode, struct file *filp)
 {
 	struct mktty_host_conn *conn = filp->private_data;
 	unsigned long flags;
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	unsigned long identity = (unsigned long)conn;
 
-	raw_spin_lock_irqsave(&mktty_host_conns_lock, flags);
+	if (!mk_native_tty_close_lock(conn, &mktty_host_conns_lock, &flags))
+#endif
+		raw_spin_lock_irqsave(&mktty_host_conns_lock, flags);
 	list_del(&conn->list);
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	mk_native_tty_boundary(identity, 6);
+#endif
 	raw_spin_unlock_irqrestore(&mktty_host_conns_lock, flags);
 
 	/* Unlink excludes new enqueues; do not wait while holding either raw lock. */
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	mk_native_tty_flush_begin(conn, &conn->wake_work);
+#endif
 	flush_work(&conn->wake_work);
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	mk_native_tty_boundary(identity, 14);
+#endif
 	kfree(conn->rx_buf);
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	mk_native_tty_boundary(identity, 7);
+#endif
 	kfree(conn);
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	mk_native_tty_boundary(identity, 8);
+#endif
 	return 0;
 }
 
@@ -315,6 +344,10 @@ static void mktty_host_ipi_handler(struct mk_ipi_data *data, void *ctx)
 
 	raw_spin_lock_irqsave(&mktty_host_conns_lock, flags);
 	conn = mktty_find_conn(msg->console_id);
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	mk_native_tty_receive(conn, conn ? conn->rx_buf : NULL, msg->console_id,
+			      msg->data, msg->len);
+#endif
 	if (conn) {
 		raw_spin_lock(&conn->rx_lock);
 		for (i = 0; i < msg->len; i++) {
@@ -327,6 +360,9 @@ static void mktty_host_ipi_handler(struct mk_ipi_data *data, void *ctx)
 		raw_spin_unlock(&conn->rx_lock);
 		/* Queue before dropping the lookup/lifetime lock, never after it. */
 		schedule_work(&conn->wake_work);
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+		mk_native_tty_boundary((unsigned long)conn, 4);
+#endif
 	}
 	raw_spin_unlock_irqrestore(&mktty_host_conns_lock, flags);
 }
@@ -397,6 +433,10 @@ static int mktty_spawn_activate(struct tty_port *port, struct tty_struct *tty)
 		mktty_spawn.rx_enabled = true;
 	}
 	raw_spin_unlock_irqrestore(&mktty_spawn.lock, flags);
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	if (!ret)
+		mk_native_spawn_tty_activate();
+#endif
 	return ret;
 }
 
@@ -420,6 +460,9 @@ static void mktty_spawn_receive_work(struct work_struct *work)
 	unsigned int budget = MKTTY_RX_BUF_SIZE, count, inserted;
 	unsigned long flags;
 	u8 buf[512];
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	bool observed = mk_native_spawn_tty_begin(work);
+#endif
 
 	while (budget) {
 		raw_spin_lock_irqsave(&mktty_spawn.lock, flags);
@@ -429,7 +472,13 @@ static void mktty_spawn_receive_work(struct work_struct *work)
 		raw_spin_unlock_irqrestore(&mktty_spawn.lock, flags);
 		if (!count)
 			break;
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+		mk_native_spawn_tty_chunk(count);
+#endif
 		inserted = tty ? tty_insert_flip_string(&mktty_spawn.port, buf, count) : 0;
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+		mk_native_spawn_tty_inserted(inserted);
+#endif
 		if (inserted)
 			tty_flip_buffer_push(&mktty_spawn.port);
 		if (inserted < count) {
@@ -448,22 +497,37 @@ static void mktty_spawn_receive_work(struct work_struct *work)
 		schedule_work(&mktty_spawn_rx_work);
 	raw_spin_unlock_irqrestore(&mktty_spawn.lock, flags);
 	mktty_spawn_report_drops();
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	mk_native_spawn_tty_end(observed);
+#endif
 }
 
 static void mktty_spawn_shutdown(struct tty_port *port)
 {
 	unsigned long flags;
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	unsigned int discarded;
+#endif
 
 	raw_spin_lock_irqsave(&mktty_spawn.lock, flags);
 	mktty_spawn.rx_enabled = false;
 	raw_spin_unlock_irqrestore(&mktty_spawn.lock, flags);
 	/* The worker never takes the port mutex held by tty_port_shutdown(). */
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	mk_native_spawn_tty_shutdown(&mktty_spawn_rx_work, false, 0);
+#endif
 	cancel_work_sync(&mktty_spawn_rx_work);
 	raw_spin_lock_irqsave(&mktty_spawn.lock, flags);
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	discarded = kfifo_len(&mktty_spawn_rx_fifo);
+#endif
 	mktty_spawn.rx_dropped += kfifo_len(&mktty_spawn_rx_fifo);
 	kfifo_reset(&mktty_spawn_rx_fifo);
 	raw_spin_unlock_irqrestore(&mktty_spawn.lock, flags);
 	mktty_spawn_report_drops();
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	mk_native_spawn_tty_shutdown(&mktty_spawn_rx_work, true, discarded);
+#endif
 }
 
 static const struct tty_port_operations mktty_spawn_port_ops = {
@@ -487,9 +551,15 @@ static void mktty_spawn_close(struct tty_struct *tty, struct file *filp)
 static void mktty_spawn_hangup(struct tty_struct *tty)
 {
 	if (tty->index == 0) {
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+		mk_native_spawn_tty_hangup(false);
+#endif
 		tty_port_hangup(&mktty_spawn.port);
 		/* Core's first ldisc flush precedes driver hangup; RX is drained now. */
 		tty_ldisc_flush(tty);
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+		mk_native_spawn_tty_hangup(true);
+#endif
 	}
 }
 
@@ -561,6 +631,10 @@ static void mktty_spawn_ipi_handler(struct mk_ipi_data *data, void *ctx)
 	if (mktty_spawn.rx_enabled) {
 		copied = kfifo_in(&mktty_spawn_rx_fifo, msg->data, msg->len);
 		mktty_spawn.rx_dropped += msg->len - copied;
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+		mk_native_spawn_tty_rx(msg->len, copied, kfifo_len(&mktty_spawn_rx_fifo));
+		if (!mk_native_spawn_tty_queue(&mktty_spawn_rx_work))
+#endif
 		schedule_work(&mktty_spawn_rx_work);
 	}
 	raw_spin_unlock_irqrestore(&mktty_spawn.lock, flags);

@@ -14,6 +14,9 @@
 #include <linux/ioport.h>
 #include <linux/rcupdate.h>
 #include "internal.h"
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+#include <asm/multikernel_test.h>
+#endif
 
 /* Callback management */
 static struct mk_ipi_handler __rcu *mk_handlers;
@@ -98,8 +101,20 @@ void multikernel_unregister_handler(struct mk_ipi_handler *handler)
 	raw_spin_unlock_irqrestore(&mk_handlers_lock, flags);
 
 	if (p) {
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+		unsigned long identity = (unsigned long)p;
+
+		mk_native_rcu_boundary(identity, 2); /* actually unlinked */
+		mk_native_rcu_boundary(identity, 3); /* native grace period */
+#endif
 		synchronize_rcu();
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+		mk_native_rcu_boundary(identity, 5);
+#endif
 		kfree(p);
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+		mk_native_rcu_boundary(identity, 6); /* no freed-node access */
+#endif
 	}
 }
 EXPORT_SYMBOL(multikernel_unregister_handler);
@@ -110,8 +125,15 @@ void mk_instance_ipi_deactivate(struct mk_instance *instance)
 
 	lockdep_assert_held(&mk_overlay_mutex);
 	/* Acquiring the lock drains every already-entered ring producer. */
-	raw_spin_lock_irqsave(&instance->ipi_lock, flags);
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	if (!mk_native_writer_deactivate_lock(instance, &flags))
+#endif
+		raw_spin_lock_irqsave(&instance->ipi_lock, flags);
 	instance->ipi_data = NULL;
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	mk_native_writer_boundary(instance, 5);
+	mk_native_destroy_boundary((unsigned long)instance, 2);
+#endif
 	raw_spin_unlock_irqrestore(&instance->ipi_lock, flags);
 }
 
@@ -250,6 +272,9 @@ int multikernel_send_ipi_data(int instance_id, void *data, size_t data_size, uns
 
 	/* We've claimed slot 'head', now fill it */
 	slot = &ipi_data->ring.entries[head];
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	mk_native_writer_claim(instance, data, data_size);
+#endif
 
 	slot->sender_cpu = arch_cpu_physical_id(smp_processor_id());
 	slot->type = type;
@@ -264,9 +289,16 @@ int multikernel_send_ipi_data(int instance_id, void *data, size_t data_size, uns
 	 * be looking at it; everything above must be visible first.
 	 */
 	smp_store_release(&slot->data_size, data_size);
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	mk_native_writer_boundary(instance, 4);
+#endif
 	raw_spin_unlock_irqrestore(&instance->ipi_lock, flags);
 
 	mk_arch_send_ipi(target);
+
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	mk_native_destroy_hold(instance, data, data_size);
+#endif
 
 	mk_instance_put(instance);
 	return 0;
@@ -279,6 +311,10 @@ unlock:
 
 static void mk_ipi_drain_ring(void)
 {
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	u64 native_cookie;
+	unsigned int native_type;
+#endif
 	struct mk_ipi_data *slot;
 	struct mk_ipi_handler *handler;
 	unsigned int head, tail, next_tail;
@@ -338,11 +374,20 @@ static void mk_ipi_drain_ring(void)
 		}
 		rcu_read_unlock();
 
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+		/* Copy before allowing a producer to reuse this slot. */
+		native_type = slot->type;
+		native_cookie = mk_native_rcu_tag(slot);
+#endif
+
 		/* Mark consumed so the slot reads as unpublished again */
 		slot->data_size = 0;
 		next_tail = mk_ring_idx(tail + 1);
 		/* Pair with producers' acquire: clear precedes all future reuse. */
 		atomic_set_release(&mk_self->ipi_data->ring.tail, next_tail);
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+		mk_native_rcu_consumed(native_type, data_size, native_cookie);
+#endif
 		messages_processed++;
 
 		if (messages_processed >= MK_IPI_RING_SIZE)

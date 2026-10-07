@@ -12,6 +12,13 @@
 #define u64 __u64
 typedef u64 mk_phys_cpu_t;
 #define __init
+#define CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST 1
+#define MK_NATIVE_CPU_LOCKED 2
+#define MK_NATIVE_CPU_BEFORE_ACK 3
+#define MK_NATIVE_CPU_BUSY 4
+#define MK_NATIVE_CPU_ACK_SENT 5
+#define MK_NATIVE_QUIESCE_CLOSED 6
+#define MK_NATIVE_QUIESCE_DRAINED 7
 #define GFP_ATOMIC 0
 #define WQ_MEM_RECLAIM 1
 #define pr_err(...) do { } while (0)
@@ -36,6 +43,10 @@ static bool mk_overlay_mutex;
 #define wake_up_all(wait) ((void)(wait))
 #define wait_event(wait, condition) \
 	do { (void)(wait); while (!(condition)) run_wait_jobs(); } while (0)
+/* Controlled scheduler boundary; native task-state observation needs QEMU. */
+#define wait_event_cmd(wait, condition, before, after) \
+	do { (void)(wait); while (!(condition)) { before; run_wait_jobs(); after; } } while (0)
+static void mk_native_drain_wait(bool waiting) { (void)waiting; }
 #define PCI_SLOT(devfn) (((devfn) >> 3) & 0x1f)
 #define PCI_FUNC(devfn) ((devfn) & 7)
 #define strscpy(dst, src, size) snprintf(dst, size, "%s", src)
@@ -61,6 +72,18 @@ static bool probe_at_wait, probe_system_registration;
 static int wait_probe_results[3], system_probe_result;
 static jmp_buf parked;
 static struct { int id; } self = { .id = 7 }, *mk_self = &self;
+static struct { unsigned int point; u64 msg; mk_phys_cpu_t cpu; int result; } native_events[512];
+static unsigned int native_count;
+static inline void mk_native_checkpoint(unsigned int point, u64 msg,
+		mk_phys_cpu_t cpu, int result, unsigned int operation)
+{
+	(void)operation;
+	assert(!hard_irq);
+	if (point == MK_NATIVE_CPU_LOCKED)
+		assert(mk_overlay_mutex);
+	assert(native_count < 512);
+	native_events[native_count++] = (typeof(native_events[0])){ point, msg, cpu, result };
+}
 
 static void expect(const char *name, int got, int want)
 {
@@ -548,6 +571,13 @@ int main(void)
 	drain(active_queue());
 	expect("failed remove leaves CPU online", online[0], 1);
 	expect("remove error echoed", (int)replies[2].ack.result, -EBUSY);
+	{
+		bool rejected_admission = false;
+		for (i = 0; i < native_count; i++)
+			rejected_admission |= native_events[i].msg == 15 &&
+				native_events[i].point == MK_NATIVE_CPU_BUSY;
+		expect("mutation EBUSY must not masquerade as rejected admission", rejected_admission, 0);
+	}
 	mk_hotplug_cleanup();
 	reset();
 
@@ -603,6 +633,20 @@ int main(void)
 	reset();
 	shutdown_regressions();
 	controller_regressions();
+	expect("native checkpoints observe real worker admission and ACK paths", native_count > 0, 1);
+	{
+		bool busy = false, admitted = false, ack = false, drained = false;
+		for (unsigned int i = 0; i < native_count; i++) {
+			busy |= native_events[i].point == MK_NATIVE_CPU_BUSY && native_events[i].result == -EBUSY;
+			admitted |= native_events[i].point == MK_NATIVE_CPU_LOCKED;
+			ack |= native_events[i].point == MK_NATIVE_CPU_ACK_SENT;
+			drained |= native_events[i].point == MK_NATIVE_QUIESCE_DRAINED;
+		}
+		expect("native busy observation is an actual rejected admission", busy, 1);
+		expect("native lock observation is inside acquired controller lock", admitted, 1);
+		expect("native ACK observation follows actual send", ack, 1);
+		expect("native drain observation follows actual quiescence", drained, 1);
+	}
 	expect("incoming mutation excludes direct controller/pool changes", unlocked_mutations, 0);
 	expect("hard-IPI admission never takes an RT sleeping lock", rt_atomic_lock_errors, 0);
 	printf("CPU work ordering: %u checks, %u failures\n", checks, failures);

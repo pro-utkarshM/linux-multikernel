@@ -1,0 +1,223 @@
+Native concurrency qualification prerequisites
+=============================================
+
+This test-only branch extends the pinned #35/Kerf executing-child packer.
+It introduces no production message family or public interface. Do not include
+the native_concurrency_test object or its default-off Kconfig option in a
+production submission. Old six-CPU halt lanes remain unchanged.
+
+First gate: nested CPU pool roundtrip
+-----------------------------------
+
+Enable CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST=y and DEBUG_FS in an x86 GCC
+build. Build with build_x86_child.py from the explicit clean source so its
+mk-x86-build.json binds the successful source/tree/config/binary outputs.
+Use prepare_x86_child.py's existing arguments with --profile=nested.
+This uses the same pinned #35 packaging and Kerf; no package installation.
+
+Boot ONLY the documented disposable QEMU q35 VM:
+
+  timeout --kill-after=5s 240s qemu-system-x86_64 \
+    -machine q35 -accel tcg,thread=multi -cpu max -smp 8 -m 3072 \
+    -kernel "$bundle/bzImage" -initrd "$bundle/host-initrd.cpio.gz" \
+    -append 'console=ttyS0,115200 rdinit=/init panic=0 kernelcore=1G log_buf_len=4M mk_test=x86-nested-host mk_native_concurrency_test=1 nokaslr' \
+    -nographic -monitor none -nic none -no-reboot
+
+Run the frozen verifier, requiring BOTH actual VM and verifier exit success:
+
+  python3 -B "$bundle/verify_x86_nested.py" --bundle "$bundle" \
+    --revision "$revision" "$serial_log"
+
+Three physical CPUs remain with the host; three run a real 512 MiB child;
+two remain free. The child pools its last secondary with a 16 MiB chunk,
+returns it through a real /resources overlay, then removes every nested
+chunk. Require actual online/owned sets, empty free pool, zero local park/slot
+addresses, specific successful transactions, and parent confirmed halt/unload.
+The root-only local_snapshot is protected by mk_overlay_mutex and reports
+full-width physical IDs. It does not inject a stop or claim cached park flags
+prove execution has stopped. The option AND explicit boot parameter AND known
+QEMU DMI identity must be present, including in the child.
+
+If return/teardown fails, preserve allocations and raw output; do not force
+recovery to make this normal roundtrip pass. The VM can then be discarded.
+No CPU pool/controller race can be qualified before this prerequisite passes.
+This gate alone is NOT native worker/controller, callback, IRQ/RCU, writer,
+PREEMPT_RT, DMA, crash-kexec or physical-hardware proof.
+
+Run all test_*.py via Python unittest discovery and the existing *_test.sh
+runners. test_verify_x86_nested.py exercises false-pass evidence mutations;
+its fabricated trace is a verifier unit test, never native qualification.
+
+All profiles require the four live debug_locks boundary samples documented in
+README.x86-native. Child final sampling follows the tested child-side work:
+RCU/registry completion, MKTTY reconnect/health, or nested-pool retirement.
+Admission samples after observing the genuine drain wait and before releasing
+accepted work toward shutdown. Writer/destruction sample the child before
+halt, then sample the host after their host-only reclamation work. Terminal
+registry cleanup still samples the live child but never attempts normal halt.
+Host final sampling follows each profile's last operation. This does not turn
+endpoint samples into PREEMPT_RT, continuous lockdep or hardware proof.
+
+Second gate: native process admission and timeout drain
+------------------------------------------------------
+
+Package the enabled clean build with --profile=admission. Use the same
+eight-CPU QEMU command, replacing mk_test=x86-nested-host with
+mk_test=x86-admission-host and increasing the outer timeout to 360 seconds.
+Run the frozen verify_x86_admission.py with --bundle, --revision and raw log.
+Both VM and verifier must exit zero. This first repeats the nested prerequisite.
+
+The child holds the real controller mutex before an incoming CPU removal,
+then reverses the order: an accepted CPU worker holds the mutex while a real
+local pool overlay waits. Busy ACK, explicit remove retry, re-add and local
+pool retirement use real resource operations, transactions and ownership
+readback. The final case holds an accepted CPU add before ACK past the real
+requester timeout. The parent must retain the CPU and reject active unload;
+requested halt must wait for that accepted work before confirming every CPU.
+
+Process gates are root-only debugfs files under mk-native-concurrency-test.
+Each hold is bounded to 30 seconds; automatic release invalidates the run.
+The fixed event buffer rejects overflow. Native sequence numbers correlate
+debugfs observations, resource request IDs, physical CPUs and ACK results;
+controller transaction IDs are a separate namespace. The hooks never delay
+IRQ handlers. Literal oracle fixtures are not native evidence.
+
+Controller waiting requires a failed native mutex_trylock (point12), not the
+pre-call attempt marker (point8). Drain observation requires the actual shutdown
+task in TASK_UNINTERRUPTIBLE after wait_event_cmd prepared its wait and found
+accepted work outstanding. The closed-admission marker alone is insufficient.
+The drain observer retains one task reference in the disposable VM, not a
+worker/resource reference; no printing or sleeping occurs in that wait hook.
+
+Remote CPU removal while a child-local park allocation still exists is NOT
+covered: the controller-first case retires that allocation before retry;
+the worker-first case removes its CPU before creating the allocation.
+IRQ/RCU callback, MKTTY close, ring writer retirement, lockdep/RT and physical
+hardware qualification remain separate gates; this profile cannot certify them.
+
+Third gate, first case: actual IPI callback versus unregister
+-----------------------------------------------------------
+
+Use --profile=rcu, mk_test=x86-rcu-host and verify_x86_rcu.py with the same
+eight-CPU QEMU/build/bundle discipline. The child sends a nonce using the
+existing MK_MSG_USER family, through the real ring and x86 vector. H0 holds
+the actual callback inside its RCU read section; a precreated H1 kthread
+unlinks that exact handler and calls synchronize_rcu(). H2 observes the
+waiter sleeping with unlink/grace-entry records present and no return/free,
+then releases. A monotonic IRQ-safe two-second deadline aborts qualification
+and releases automatically; this gate never sleeps or prints from IRQ context.
+
+Preallocated records prove vector/hardirq entry, last context access, grace
+period completion, actual handler/context frees, and two consumed messages
+with exactly one callback invocation. The second message arrives after
+unregister and must not invoke the old callback. Only a task-observer reference
+is retained for the disposable VM's one-shot report; it does not pin the tested
+handler/context. The test files require the existing config/boot/QEMU guards.
+This does not qualify messaging terminal cleanup, MKTTY close or ring writers.
+
+Message registry replacement and terminal cleanup
+------------------------------------------------
+
+Use --profile=registry and mk_test=x86-registry-host, with an explicit
+mk_registry_mode=replace or mk_registry_mode=cleanup. The frozen verifier is
+verify_x86_registry.py with --mode matching the launch. Each mode needs its
+own disposable VM; terminal cleanup is not reversible and is never followed
+by a messaging reinitialization.
+
+Both cases enter the real message wrapper and callback on H0. H1 performs
+the actual type-list detach and unregister/cleanup. Another H1 kthread tries
+same-type registration: only its genuine failed mutex_trylock counts as
+contention, followed by the normal blocking mutex_lock. H2 observes both
+waiters sleeping and releases the bounded IRQ gate. Require last callback
+access before native grace completion, handler/wrapper frees, and registration
+return. Replacement must succeed and receive the second message; terminal
+cleanup must reject registration with -ESHUTDOWN and invoke neither old nor
+replacement callback on the second consumed message.
+
+Replacement finishes with ordinary confirmed halt/unload. Terminal cleanup
+leaves the instance ACTIVE with its assigned CPUs and memory retained; the
+host reports survival and discards the VM. It MUST NOT be described as safe
+instance reclamation or ordinary shutdown after cleanup. These tests still
+do not qualify MKTTY final close, ring writers, lockdep/RT or real hardware.
+
+MKTTY selected receive versus last close
+---------------------------------------
+
+Use --profile=tty, mk_test=x86-tty-host and frozen verify_x86_tty.py. After
+the nested prerequisite, the child sends one nonce-tagged OUTPUT. H0 holds
+its actual RX callback with the connection-list lock held; H1 closes the
+only host console file reference. Only a real failed lock acquisition counts
+as contention. H2 releases the bounded two-second IRQ gate. Require RX's last
+connection access/enqueue before close acquires the lock, unlinks the selected
+connection, and frees its RX buffer and connection. Observation retains only
+pointer identities and never dereferences freed memory.
+
+A second real OUTPUT must reach the native vector and find no connection.
+Only then reopen the console; require unchanged child boot identity, expected
+online CPUs and zero host/child taint before ordinary confirmed halt/unload.
+Before the health reply, retrieve the child's /dev/kmsg records from sequence
+zero through a nonce-tagged end marker written after reconnect. Length-framed,
+base64 chunks preserve bytes; require contiguous sequences, ordered chunks,
+byte/record counts and SHA256. Ring overrun, missing end marker, truncation or
+encoded warning/BUG/Oops/RCU stall fails qualification. Taint alone cannot rule
+out recovered diagnostics emitted while the only console connection was closed.
+The child retains one snapshot and reports TTY_KMSG_READY. The host requests
+each chunk by nonce and consecutive index only after consuming the preceding
+reply. This avoids bursting a log larger than the bounded MKTTY RX buffer;
+it does not claim reliable transport under unrelated output floods. Missing
+or corrupt chunks still fail the frozen verifier without repair or retries.
+The first two writes contain no newline to avoid terminal output conversion.
+Any deadline, extra event or premature free invalidates the run. Literal
+verifier fixtures cannot qualify native execution. Ring-writer retirement,
+lockdep/RT and physical-hardware evidence remain separate gates.
+
+For the separate deferred-worker-versus-close case, use the same tty bundle
+with mk_tty_mode=worker and pass --mode=worker to verify_x86_tty.py. A worker
+waits after the selected receive copy and outside all raw locks. The closer
+unlinks, then blocks in the real flush_work barrier completion. Test-only
+workqueue/completion hooks match that exact work, completion and closer task;
+the wait event is emitted only after the completion wait prepared task state.
+H2 observes TASK_UNINTERRUPTIBLE after that phase, then releases the worker.
+Require last worker access before flush return, buffer free and connection
+free. The one-shot observer retains only a task reference, not an object pin.
+Worker gates have ten-second safety timeouts; host observation remains bounded
+to one second so the child's second write must still arrive after close.
+Missing wait proof, wrong mode, IRQ-context wakeup, early free or timeout fails.
+
+Ring producer versus loaded-Image unload
+--------------------------------------
+
+Use --profile=writer, mk_test=x86-writer-host and frozen verify_x86_writer.py.
+The real nested child first halts with every assigned CPU confirmed parked.
+A precreated H0 kthread sends an existing-family message through the actual
+ring and holds its claimed slot under ipi_lock. H1 executes Kerf unload:
+only a real failed raw-spin trylock, followed by normal acquisition, counts
+as contention. H2 releases the bounded IRQ-disabled gate. Require publication
+before deactivation before actual Image segment returns; a later real sender
+must receive -ENODEV. Initial send success, nonzero Image/ring identities,
+segment count, exact event ordering and zero host taint are mandatory.
+
+The observer holds no instance reference of its own. This case establishes
+producer exclusion against Image unload, NOT persistent ring-page destruction:
+boot/ring pages survive unload and require a separate final-reference test.
+
+Sender reference versus instance destruction
+-------------------------------------------
+
+Use --profile=destroy, mk_test=x86-destroy-host and verify_x86_destroy.py.
+After the same confirmed halt, an H0 sender publishes and rings the real
+doorbell, then waits in process context immediately before its original
+lookup reference is dropped. No observer takes an extra instance reference.
+H1 unloads the Image, then applies Kerf's real removal overlay. Require IDR
+removal, synchronous pool/control-memory retirement and CPU return before
+H2 releases that sender. A new lookup/send must return -EINVAL while the old
+reference still exists. This explicitly demonstrates that kref is NOT a
+pool-allocation pin.
+
+After release, require the original sender's put boundary, actual deferred
+release work and RCU grace completion, then persistent boot/ring page frees
+and instance-record free. The bounded process hold is 30 seconds; expiry
+invalidates qualification. Records retain identities only, never dereference
+freed memory. Frozen verifiers require the real removal transaction, missing
+instance directory, returned physical CPU set and zero host taint. This case
+does not qualify DMA/device quiescence, PREEMPT_RT or physical hardware.

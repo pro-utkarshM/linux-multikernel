@@ -324,12 +324,21 @@ DEFINE_IDTENTRY_SYSVEC(sysvec_call_function_single)
 
 #ifdef CONFIG_MULTIKERNEL
 void generic_multikernel_interrupt(void);
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+#include <asm/multikernel_test.h>
+#endif
 
 DEFINE_IDTENTRY_SYSVEC(sysvec_multikernel)
 {
 	apic_eoi();
 	inc_irq_stat(irq_call_count);
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	mk_native_rcu_vector(true);
+#endif
 	generic_multikernel_interrupt();
+#ifdef CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST
+	mk_native_rcu_vector(false);
+#endif
 }
 
 /**

@@ -1,0 +1,263 @@
+Executing-child extension of Nickolaev's #35 harness
+===================================================
+
+Pinned dependencies (preserve their authorship):
+  https://github.com/nickolaev/multikernel
+  48507f176520b11a655344510b1b865b037e527f
+  https://github.com/multikernel/kerf
+  38daa5687d6748846ffd003599a3bfba29785cd6
+
+The offline packer extends the earlier pre-spawn adapter's #35 newc/gzip
+packaging and Kerf runtime. It does not install anything, build dependencies or
+replace #35's general harness. Host prerequisites include Python, Click,
+libfdt/_libfdt, BusyBox at /usr/lib/initcpio/busybox, cpio, gzip and QEMU x86.
+It reports missing prerequisites instead of installing them. Run it only with
+clean dependency checkouts and a clean kernel source at the built revision.
+
+Use x86_child.config requirements in a fresh build directory's .config, then
+build with the same-source GCC wrapper. It records the explicit clean source
+revision/tree, build command, stable config and both resulting binary hashes in
+mk-x86-build.json only after a successful build. Packaging refuses missing,
+stale or mismatched proof. Do not overwrite historical builds or proof files.
+Example (explicit paths):
+
+  python3 -B build_x86_child.py --source "$source" \
+    --kernel-build "$build" --jobs=4
+
+  python3 prepare_x86_child.py --prepare --revision "$revision" \
+    --source "$source" --kernel-build "$build" \
+    --harness "$nickolaev_harness" --kerf "$kerf" --output "$output_parent"
+
+Without --prepare this is read-only preflight. --prepare makes a fresh bundle
+under output_parent, copies the same Python runtime into two root filesystems,
+and freezes inputs and SHA256SUMS before launch. The child initrd has no kernel
+payload. The supplied output parent must already exist.
+
+Boot ONLY in a disposable VM, never on the machine running these tests:
+
+  timeout --kill-after=5s 240s qemu-system-x86_64 \
+    -machine q35 -accel tcg,thread=multi -cpu max -smp 6 -m 3072 \
+    -kernel "$bundle/bzImage" -initrd "$bundle/host-initrd.cpio.gz" \
+    -append 'console=ttyS0,115200 rdinit=/init panic=0 kernelcore=1G log_buf_len=4M mk_test=x86-host nokaslr' \
+    -nographic -monitor none -nic none -no-reboot
+
+Capture the complete command, QEMU version, raw serial output and actual timeout
+exit code. Both VM exit and verifier must succeed; do not let tee hide failures.
+Run the frozen verifier with an independently pinned source revision and input
+bundle; it checks build-bound binaries/config and the frozen manifest too:
+
+  python3 -B "$bundle/verify_x86_child.py" --bundle "$bundle" \
+    --revision "$revision" --halt=requested "$serial_log"
+
+Run both test_verify_x86_child.py and test_x86_provenance.py unit suites.
+Hash evidence separately after copying it; the original input bundle manifest
+does not attest output logs added after launch.
+
+The halt driver drains the child console after stop confirmation and before
+unload. A partial last record or child FAIL prevents success. The verifier
+requires the nonce-correlated CHILD_CAPTURED boundary and rejects kernel
+warnings, BUG/Oops, lockups and RCU-stall diagnostics even with PASS markers.
+
+Live lockdep evidence is mandatory, not inferred from CONFIG_LOCKDEP or taint.
+The existing /proc/lockdep_stats must contain exactly one debug_locks field
+with value 1. Host BEGIN and HOST_SURVIVED, child CHILD_ALIVE and the
+nonce/boot-ID-correlated CHILD_LOCKDEP_FINAL carry fresh reads. The child is
+queried before termination; the host is checked after cleanup. Frozen bundle
+validation also requires the strict lockdep/RCU/atomic-sleep/preemption options
+in x86_child.config. Missing, disabled, malformed, duplicate, stale or
+out-of-order samples fail qualification. No skip mode or new kernel API.
+
+These are boundary observations, not continuous monitoring or proof of the
+stopped child's final instruction. Kernel diagnostics are still rejected
+independently. Once stopped, a child cannot answer another proc query.
+
+Spawn RX session lanes (test-only integration branch)
+---------------------------------------------------
+Use the existing --profile=tty bundle, eight-CPU x86-tty-host QEMU command,
+and mk_tty_mode=spawn-close, spawn-hangup, spawn-overflow or spawn-offline.
+Pass the same --mode to its frozen verify_x86_tty.py. These modes require
+CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST and the existing boot opt-in/QEMU guard.
+Each is a fresh one-shot VM, never run on a production kernel or host.
+
+Close/hangup holds an actual spawn RX invocation after dequeue and before
+flip insertion, observes the actual cancellation completion wait, then
+releases it. A new TTY session must receive only a fresh nonce-tagged payload.
+Hangup records the real driver entry and final ldisc flush, and keeps an old
+hung-up file open through the freshness verdict so last-close cleanup cannot
+substitute for that flush. The observer requires actual late inserted bytes.
+
+Overflow holds before dequeue, delivers 20000 bytes through the real host TTY,
+and requires 16384 FIFO bytes accepted, 3616 dropped, and exact accepted-byte
+delivery. The expected dropped-input warning is not a lockdep warning.
+
+Offline uses explicitly injected queue_work_on placement on child logical
+CPU2. The same real RX invocation must start there, remain held across
+removal into the child's local pool, and continue on another online CPU
+before CPU2 is returned through the existing pool overlay. The physical ID
+is resolved separately from logical CPU2. Return must restore ownership and
+online state before retiring the temporary 16 MiB park-storage grant.
+Ordinary host routing targets the child's first CPU; sender affinity alone
+would not exercise this condition. This lane covers ordinary CPU hotplug,
+via local pool departure/return, not parent-to-child hot-add,
+pending-but-never-started work, or every scheduler.
+The nested pool prerequisite still runs separately before each session lane.
+Direct cpu2/online=0 then =1 failed to re-online the CPU in an earlier run;
+that ordinary-hotplug failure remains open and is not fixed by this lane.
+
+TTY_HELD is a snapshot taken before release and printed after stdout is
+available again; kernel event ordering supplies the causal evidence, not its
+serial-print time. All modes retain full child kmsg transfer, live lockdep,
+confirmed halt/unload and host-survival requirements. Observer task references
+are retained for this one-shot VM. All observer hooks are excluded from the
+production submission; no new production ABI is introduced.
+Raw-mode setup uses TCSANOW: the harness must not discard stale input itself.
+The drain observer requires workqueue's from_cancel identity, not an ordinary
+flush_work barrier. Selected-worker completion plus a trailing readability
+check does not independently prove all later RX/flip work quiescent. No such
+whole-path qualification is claimed by these lanes.
+
+This boot slice requires six distinct physical IDs resolved from /proc/cpuinfo:
+two host CPUs, two assigned child CPUs and two spare pool CPUs. The host gives
+the child 512 MiB, loads the real ELF Image plus child initrd, and requires both
+assigned CPUs online, PID 1, a distinct boot identity and a nonce-matched reply
+over mktty. Requested halt must report all CPUs parked before LOADED; unload
+must leave the host alive and instance READY with retained CPU ownership.
+The 768 MiB contiguous pool failed intermittently before spawn with KASLR
+enabled at 2 and 3 GiB VM RAM. The bounded qualification lane uses 3 GiB plus
+host nokaslr; this is not a production allocator fix or KASLR-on qualification.
+
+A PASS is ONLY executing-child boot, requested halt and unload under QEMU TCG.
+It is NOT incoming-worker/controller interleaving, IRQ/RCU callback retirement,
+failed confirmation, force halt, DMA, crash-kexec or physical-hardware proof.
+
+Additional bounded termination lanes use the same bundle. Add one of
+mk_x86_halt=force, mk_x86_halt=halt, mk_x86_halt=poweroff or mk_x86_halt=reboot to the HOST QEMU
+command line, and pass the matching --halt option to verify_x86_child.py. The
+force lane also requires the native report that NMIs went to both assigned
+CPUs before confirmation. Voluntary lanes send a mktty userspace command to
+the child and wait for confirmed settlement; they do not call host poweroff or
+reboot until all assertions have run. A pass in these lanes does not prove
+failed-confirmation retention or callback/concurrency safety.
+Healthy nonforce lanes reject NMI settlement; every retention lane requires a
+separate recovery NMI after clearing the selector. Failure observation, specific
+destruction refusal and allocation snapshots must occur in their intended order.
+
+Both init recipes and kernel instrumentation require the recognized QEMU q35
+DMI identity in addition to PID1/architecture and explicit boot guards. This
+prevents accidental use on ordinary bare metal, not malicious identity spoofing
+or proof that an arbitrary VM is disposable. Use only the documented local lane.
+
+Stop-confirmation failure lane (test branch only): build a separate kernel with
+CONFIG_MK_X86_NATIVE_CONFIRM_TEST=y; never add it to production. Append HOST
+mk_x86_halt=MODE-retain mk_native_confirm_test=1, where MODE is requested,
+force, halt, poweroff or reboot, and verify with --halt=MODE-retain. The option
+defaults off; without the explicit host boot
+parameter no debugfs interface is created and no confirmation is injected.
+The default-off build must have no mk_x86_native_confirm_failure symbol.
+
+After a real child handshake, the selector rejects confirmation for the last
+assigned physical CPU. Settlement must fail and leave ACTIVE, CPU ownership,
+Image, ring, control/context and pool allocations unchanged. File unload must
+return EBUSY. The destruction overlay is accepted as a transaction but must
+have status failed, a specific kernel EBUSY refusal and a retained instance.
+Voluntary lanes wait for the real incoming worker's failed probe counter, not
+just an unchanged ACTIVE status that could be observed before the worker runs.
+After clearing the selector, a recovery force-halt must confirm all CPUs and
+permit unload. This models inability to prove stop, NOT a real CPU proven to
+be executing the Image, and does not qualify IRQ/RCU or bulk cleanup races.
+
+Shutdown-permission rejection (private test branch only)
+------------------------------------------------------
+These are separate from MODE-retain confirmation injection/recovery. Build
+CONFIG_MK_X86_NATIVE_CONFIRM_TEST=y, CONFIG_MK_X86_NATIVE_CONCURRENCY_TEST=y and
+CONFIG_MAGIC_SYSRQ=y, alongside x86_child.config. Package the existing halt
+profile from a clean, build-provenance-bound source commit. Ordinary
+mk_x86_halt=halt is the successful HALT control (the existing halt verifier).
+
+For each rejection mode use a fresh disposable VM and the frozen runner:
+
+  python3 -B "$bundle/run_x86_shutdown.py" --bundle "$bundle" \
+    --revision "$revision" --mode=panic-retention --output "$evidence_parent"
+
+Repeat with --mode=contended-poweroff-retention. The runner preserves the exact
+command, QEMU version, serial/debug logs, actual exit status and verifier result
+in a fresh output directory. Replay using the frozen verifier:
+
+  python3 -B "$bundle/verify_x86_shutdown.py" --bundle "$bundle" \
+    --revision "$revision" --mode=panic-retention \
+    --debug "$run/debug.log" "$run/serial.log"
+
+The child uses sysrq only for the deliberate panic. Contended poweroff holds the
+real mk_overlay_mutex at the existing controller checkpoint, bounded to 30s.
+Syscore's actual failed trylock is observed, not fabricated. The final decision
+passed to mk_halt_to_pool is written to QEMU port0xe9 using bounded stores and a
+trylock-only snapshot; it uses no printk, ring/TTY lock, allocation or wait.
+Only the opt-in q35 child instance1 with a nonce emits it. Missing/duplicate
+records, snapshot lock contention, event overflow, released/expired gates or a
+granted permit invalidate coverage. The runner forwards the actual debug-port
+record to host stdin; the host does not proceed based merely on unchanged ACTIVE.
+
+Before execution/unload/destruction refusal checks, the host closes its MKTTY
+reference. The uninjected confirmation selector/counter, assigned CPU set and
+Image/ring/control/context/pool identities must remain unchanged and ACTIVE.
+There is no forced recovery, HALTED publication or reclamation in these modes;
+the final host poweroff ends the disposable VM with resources still retained.
+The verifier binds the host acknowledgment to the raw debug record and nonce.
+Child panic is allowed only within its deliberate termination interval; other
+kernel faults, host panic and forced settlement fail the test. Lockdep samples
+remain boundary observations, not a post-panic query or proof of CPU parking.
+
+Run test_verify_x86_shutdown.py, terminal_observer_test.sh and
+voluntary_shutdown_test.sh (both normally and with
+CFLAGS=-DCONFIG_MK_X86_NATIVE_CONCURRENCY_TEST). These fixtures prove verifier
+and hook behavior, not native QEMU results. All new kernel observations stay
+private and must be excluded from production submission ranges.
+
+Kernfs snapshot exclusion and normal removal (test-only acceptance)
+-----------------------------------------------------------------
+Reuse --profile=admission and --profile=destroy with their existing eight-CPU
+q35 commands and host mk_native_concurrency_test=1. Add HOST mk_snapshot_test=1
+and pass --snapshots to the corresponding frozen verify_x86_admission.py or
+verify_x86_destroy.py. Without --snapshots no snapshot qualification is claimed;
+the original profiles/verifier checks remain mandatory and unchanged.
+
+The admission extension precomputes a valid CPU-removal overlay, then holds the
+actual host controller at its existing resource-lock checkpoint. Both root and
+instance device_tree reads must return EAGAIN within2s, while the gate remains
+active. It releases the gate, completes the actual update and retries both reads
+within2s (at most201 additional attempts). The resulting pool members/free CPUs
+and instance CPU assignment must match the completed operation. It restores the
+CPU assignment before the original admission/timeout-drain scenarios run.
+
+The destruction extension uses the same checkpoint around the existing real
+removal operation after confirmed halt/unload. It keeps an instance kernfs
+descriptor open across normal removal: after release/removal, that descriptor
+must return ENODEV, and a retried root snapshot must show all child CPUs returned
+to the pool. Existing sender-reference/destruction gates and their verifier still
+prove retirement/reclamation order. No kernel hook or production interface is
+added. Gate expiry/loss, blocking reads, a failed writer or wrong resource content
+fail qualification. Each read is an independent snapshot; no coherence across
+two separate reads is asserted. This does not pause an active callback inside
+kernfs deactivation or reproduce corruption on an old kernel.
+
+test_x86_snapshot.py checks the oracle and bounded retry, including persistent
+EAGAIN, unrelated I/O errors, missing gate evidence and stale-descriptor success.
+Native acceptance requires fresh source-bound bundles and both --snapshots runs;
+unit checks alone are not native concurrency proof.
+
+Ordinary child CPU re-online diagnostic: use the existing six-CPU halt profile
+with HOST mk_x86_reonline=1 and QEMU -debugcon file:/absolute/fresh/debug.log.
+The host passes a fresh nonce in the child boot arguments. Before opening MKTTY
+the child offlines its logical CPU1 through sysfs, then attempts to online it again. No pool donation,
+held RX work, fault selector or kernel observer is involved. Records bind the
+nonce and physical CPU to the before/offline/result topology; success also
+requires scheduling the child task on that CPU. Records go to QEMU port0xe9
+through /dev/port, independent of MKTTY. The diagnostic child never enters the
+normal handshake; the host times out before halt/unload and ends the VM.
+This diagnostic is not a pool-return pass or a safe-reclamation qualification.
+Keep its failed raw trace and compare an independently pinned baseline. The
+normal halt verifier must still fail on a failed re-online diagnostic.
+The diagnostic forwards mk_cpu_reonline_probe=1 and reports a disabled child
+debug_locks value honestly rather than stopping before the probe. A zero value
+or any kernel diagnostic remains a failure under the unchanged halt verifier;
+the separate probe path is never used in ordinary qualification runs.
