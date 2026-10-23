@@ -13,7 +13,8 @@ static void mk_spawn_stop(void)
 	if (!mk_spawned())
 		return;
 
-	/* No messaging, allocations or registry locks, including during panic. */
+	/* Separate #28 adapter; notification failure must not delay local stop. */
+	mk_riscv_notify_parent_halted();
 	smp_send_stop();
 	mk_enter_pool_state(NULL);
 }

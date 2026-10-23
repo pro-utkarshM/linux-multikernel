@@ -2,6 +2,7 @@
 /* Real architecture hooks/secondary redirection; controlled allocator/map. */
 #include <assert.h>
 #include <errno.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -23,13 +24,18 @@ static const char stub_code[28] = { 15, 16 };
 #define mk_riscv_entry_stub_end (stub_code + sizeof(stub_code))
 struct mk_riscv_spawn_context { unsigned long image_entry; };
 struct mk_instance {
+	phys_addr_t manifest_phys;
 	struct {
 		struct mk_riscv_spawn_context *ctx;
 		phys_addr_t ctx_phys, stub_phys;
 		const void *stub;
 	} arch;
 };
-struct kimage { int unused; };
+struct kimage {
+	struct { unsigned long fdt_addr, initrd_start, initrd_size; } arch;
+	char *cmdline_buf;
+	unsigned long cmdline_buf_len;
+};
 static void *block;
 static bool fail_alloc, fail_map, spawned, ordered;
 static unsigned int allocations, mappings;
@@ -59,8 +65,13 @@ static void memunmap(void *addr) { assert(addr == block && ordered); }
 
 int main(void)
 {
-	struct mk_instance instance = { 0 };
-	struct kimage image = { 0 };
+	struct mk_instance instance = { .manifest_phys = 0xc0000000 };
+	struct kimage image = {
+		.cmdline_buf = "console=hvc0 test-child=1",
+		.cmdline_buf_len = sizeof("console=hvc0 test-child=1"),
+		.arch.initrd_start = 0xc2000000,
+		.arch.initrd_size = 0x100000,
+	};
 	unsigned long entry = 0x80402000;
 	char fdt[4096];
 	const fdt64_t *property;
@@ -74,6 +85,7 @@ int main(void)
 	assert(!instance.arch.ctx && !instance.arch.stub_phys);
 	fail_alloc = false;
 	assert(!mk_arch_prepare_instance(&image, &instance));
+	assert(image.arch.fdt_addr == 0xc0000000);
 	assert(instance.arch.ctx == block && instance.arch.stub == block + PAGE_SIZE);
 	assert(instance.arch.stub_phys == (uintptr_t)block + PAGE_SIZE);
 	assert(!memcmp(instance.arch.stub, stub_code, sizeof(stub_code)));
@@ -84,6 +96,12 @@ int main(void)
 	assert(!fdt_end_node(fdt) && !fdt_end_node(fdt) && !fdt_finish(fdt));
 	property = fdt_getprop(fdt, fdt_path_offset(fdt, "/chosen"), MK_FDT_ENTRY_STUB, &len);
 	assert(property && len == 8 && fdt64_ld(property) == instance.arch.stub_phys);
+	property = fdt_getprop(fdt, fdt_path_offset(fdt, "/chosen"), "linux,initrd-start", &len);
+	assert(property && len == 8 && fdt64_ld(property) == 0xc2000000);
+	property = fdt_getprop(fdt, fdt_path_offset(fdt, "/chosen"), "linux,initrd-end", &len);
+	assert(property && len == 8 && fdt64_ld(property) == 0xc2100000);
+	assert(!strcmp(fdt_getprop(fdt, fdt_path_offset(fdt, "/chosen"), "bootargs", NULL),
+		       "console=hvc0 test-child=1"));
 	assert(!sbi_spawn_cpu_entry(&entry) && entry == 0x80402000 && !mappings);
 	spawned = true;
 	assert(sbi_spawn_cpu_entry(&entry) == -EINVAL && !mappings);
