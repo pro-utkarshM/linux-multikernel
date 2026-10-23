@@ -296,7 +296,7 @@ static void mk_vsock_rx_work(struct work_struct *work)
 		mk_vsock_rx_pkt(skb);
 }
 
-static void mk_vsock_ipi_handler(u32 msg_type, u32 subtype,
+static void mk_vsock_ipi_handler(u32 msg_type, u32 subtype, u64 msg_id,
 				 void *payload, u32 payload_len, void *ctx)
 {
 	struct sk_buff *skb;
@@ -395,6 +395,12 @@ static void mk_transport_release(struct vsock_sock *vsk)
 			kfree_skb(skb);
 		}
 	}
+
+	/*
+	 * With a transport assigned, af_vsock leaves unhashing to us; a
+	 * socket left in the tables pins its port and itself forever.
+	 */
+	vsock_remove_sock(vsk);
 }
 
 static int mk_transport_connect(struct vsock_sock *vsk)
