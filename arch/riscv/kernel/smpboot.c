@@ -51,6 +51,8 @@ void __init smp_prepare_cpus(unsigned int max_cpus)
 	init_cpu_topology();
 
 	curr_cpuid = smp_processor_id();
+	if (!mk_riscv_cpu_assigned(curr_cpuid))
+		panic("multikernel: boot hart is not assigned to this spawn");
 	store_cpu_topology(curr_cpuid);
 	numa_store_cpu_info(curr_cpuid);
 	numa_add_cpu(curr_cpuid);
@@ -62,6 +64,10 @@ void __init smp_prepare_cpus(unsigned int max_cpus)
 	for_each_possible_cpu(cpuid) {
 		if (cpuid == curr_cpuid)
 			continue;
+		if (!mk_riscv_cpu_assigned(cpuid)) {
+			set_cpu_present(cpuid, false);
+			continue;
+		}
 		set_cpu_present(cpuid, true);
 		numa_store_cpu_info(cpuid);
 	}

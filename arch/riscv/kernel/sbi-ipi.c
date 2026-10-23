@@ -11,6 +11,7 @@
 #include <linux/irq.h>
 #include <linux/irqchip/chained_irq.h>
 #include <linux/irqdomain.h>
+#include <linux/multikernel.h>
 #include <asm/sbi.h>
 
 DEFINE_STATIC_KEY_FALSE(riscv_sbi_for_rfence);
@@ -26,6 +27,9 @@ static void sbi_ipi_handle(struct irq_desc *desc)
 
 	csr_clear(CSR_IP, IE_SIE);
 	ipi_mux_process();
+	/* SSIP may carry both mux work and a foreign kernel's doorbell. */
+	if (mk_riscv_inbox_cpu())
+		generic_multikernel_interrupt();
 
 	chained_irq_exit(chip, desc);
 }

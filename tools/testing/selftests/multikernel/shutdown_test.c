@@ -20,6 +20,8 @@ static void mk_enter_pool_state(void *arg)
 }
 static void mk_halt_to_pool(void) { notification++; longjmp(stopped, 1); }
 static void mk_panic_to_pool(void) { notification++; longjmp(stopped, 1); }
+/* Counts attempts, not published notices; panic_doorbell_test checks eligibility. */
+static void mk_riscv_notify_parent_halted(void) { notification++; }
 static void do_kernel_restart(char *arg) { (void)arg; host_reset++; longjmp(stopped, 1); }
 static void do_kernel_power_off(void) { host_reset++; longjmp(stopped, 1); }
 static void wait_for_interrupt(void) { longjmp(stopped, 1); }
@@ -52,7 +54,7 @@ int main(void)
 			else
 				machine_restart(NULL);
 		}
-		assert(!notification);
+		assert(notification == spawn);
 		assert(remote_stop == spawn && hart_stop == spawn);
 		assert(host_reset == !spawn);
 	}
