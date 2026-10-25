@@ -2,6 +2,7 @@
 /* See README.ack: real pending/dispatch code, deterministic kernel boundaries. */
 #include <assert.h>
 #include <errno.h>
+#include <limits.h>
 #include <stdbool.h>
 #include <setjmp.h>
 #include <stdio.h>
@@ -9,6 +10,7 @@
 #include <string.h>
 #include <linux/list.h>
 #include <linux/err.h>
+#include <asm-generic/atomic-gcc.h>
 
 /* tools/ uses uint64_t; production printk formats use the kernel's __u64. */
 #define u64 __u64
@@ -16,9 +18,14 @@
 #define GFP_KERNEL 0
 #define GFP_ATOMIC 0
 static bool allocation_fails;
+static bool test_hardirq;
+static unsigned int irq_allocations;
 #define kzalloc(n, flags) \
-	((void)(flags), allocation_fails ? NULL : calloc(1, n))
-#define kmalloc(n, flags) ((void)(flags), allocation_fails ? NULL : malloc(n))
+	((void)(flags), irq_allocations += test_hardirq, \
+	 allocation_fails ? NULL : calloc(1, n))
+#define kmalloc(n, flags) \
+	((void)(flags), irq_allocations += test_hardirq, \
+	 allocation_fails ? NULL : malloc(n))
 #define kfree free
 #define pr_err(...) fprintf(stderr, __VA_ARGS__)
 #define pr_warn(...) fprintf(stderr, __VA_ARGS__)
@@ -28,7 +35,6 @@ static bool allocation_fails;
 #define pr_debug(...) \
 	do {          \
 	} while (0)
-static bool test_hardirq;
 #define DEFINE_SPINLOCK(name) bool name
 #define spin_lock_irqsave(lock, flags) \
 	do {                           \
@@ -117,7 +123,14 @@ static unsigned long wait_for_completion_timeout(struct completion *c,
 	return 0;
 }
 
-struct mk_instance { int id; };
+struct work_struct {
+	void (*func)(struct work_struct *work);
+};
+struct mk_instance {
+	int id, refs;
+	struct work_struct halted_work;
+	atomic_t halted_pending;
+};
 #include "ack-types.h"
 
 static struct mk_ipi_data sent;
@@ -125,29 +138,26 @@ static int sent_to;
 static int send_error;
 
 /* Transport boundary: capture real mk_send_message() output for replay. */
-static int multikernel_send_ipi_data(int instance_id, void *data, size_t size,
-				     unsigned long type)
+static int mk_send_message_ipi(int instance_id, struct mk_instance *instance,
+			       const struct mk_message *message, const void *payload)
 {
-	assert(size <= sizeof(sent.buffer));
-	sent_to = instance_id;
-	sent.type = type;
-	sent.data_size = size;
-	memcpy(sent.buffer, data, size);
-	return send_error;
-}
+	size_t size = sizeof(*message) + message->payload_len;
+	struct mk_message *msg = (struct mk_message *)sent.buffer;
 
-static int multikernel_send_ipi_data_to(struct mk_instance *instance, void *data,
-				      size_t size, unsigned long type)
-{
-	return multikernel_send_ipi_data(instance->id, data, size, type);
+	assert(size <= sizeof(sent.buffer));
+	sent_to = instance ? instance->id : instance_id;
+	sent.type = message->msg_type;
+	sent.data_size = size;
+	memset(sent.buffer, 0, size);
+	memcpy(msg, message, offsetof(struct mk_message, payload));
+	if (payload)
+		memcpy(msg->payload, payload, message->payload_len);
+	return send_error;
 }
 
 #include "ack-messaging.h"
 
 /* Only the hardware mutation, scheduler and final parking are substituted. */
-struct work_struct {
-	void (*func)(struct work_struct *work);
-};
 struct workqueue_struct {
 	int unused;
 };
@@ -207,10 +217,11 @@ static void smp_call_function(void (*fn)(void *), void *arg, int wait)
 	assert(fn == mk_enter_pool_state && !wait);
 }
 
-static void schedule_work(struct work_struct *work)
+static bool schedule_work(struct work_struct *work)
 {
 	assert(!queued);
 	queued = work;
+	return true;
 }
 
 static bool queue_work(struct workqueue_struct *wq, struct work_struct *work)
@@ -227,6 +238,22 @@ static void unexpected_work(struct work_struct *work)
 
 #define INIT_WORK(work, fn) ((work)->func = (fn))
 #define mk_halted_work_fn unexpected_work
+
+static struct mk_instance halted_peer = { .id = 65537 };
+
+static struct mk_instance *mk_instance_find(int id)
+{
+	if (id != halted_peer.id)
+		return NULL;
+	halted_peer.refs++;
+	return &halted_peer;
+}
+
+static void mk_instance_put(struct mk_instance *instance)
+{
+	assert(instance->refs > 0);
+	instance->refs--;
+}
 
 #include "ack-resource.h"
 #include "ack-system.h"
@@ -534,6 +561,7 @@ static void worker_regressions(void)
 
 			/* Each case represents a fresh receiver, before shutdown closes it. */
 			mk_hotplug_accepting = true;
+			atomic_set(&mk_shutdown_requested, 0);
 
 			if (i < 2) {
 				payload = &cpu;
@@ -619,6 +647,58 @@ static void worker_regressions(void)
 	       1);
 }
 
+static void shutdown_admission_regressions(void)
+{
+	struct mk_shutdown_payload payload = { .sender_instance_id = 3 };
+	struct mk_ipi_data request;
+	struct work_struct *work;
+	struct mk_shutdown_work *sw;
+	const u64 id = 0x123456789abcdef0ULL;
+
+	assert(!queued);
+	/* Earlier worker cases discarded their parked fixture kernels. */
+	atomic_set(&mk_shutdown_requested, 0);
+	mk_hotplug_accepting = true;
+	assert(!mk_send_message_id(1, MK_MSG_SYSTEM, MK_SYS_SHUTDOWN,
+				   id, &payload, sizeof(payload)));
+	request = sent;
+	irq_allocations = 0;
+	allocation_fails = test_hardirq = true;
+	/* Invalid input must not consume the one valid shutdown opportunity. */
+	((struct mk_message *)request.buffer)->payload_len = 0;
+	dispatch(&request);
+	expect("SHUTDOWN", "short request queues no work", queued == NULL, 1);
+	request = sent;
+	dispatch(&request);
+	allocation_fails = test_hardirq = false;
+	expect("SHUTDOWN", "hard IPI does not enter allocator", irq_allocations, 0);
+	expect("SHUTDOWN", "shutdown survives allocator exhaustion", queued != NULL, 1);
+	if (!queued)
+		return;
+	work = queued;
+	sw = container_of(work, struct mk_shutdown_work, work);
+	payload.sender_instance_id = 9;
+	payload.flags = 7;
+	assert(!mk_send_message_id(1, MK_MSG_SYSTEM, MK_SYS_SHUTDOWN,
+				   id + 1, &payload, sizeof(payload)));
+	test_hardirq = true;
+	dispatch(&sent);
+	test_hardirq = false;
+	expect("SHUTDOWN", "duplicate preserves pending work", queued == work, 1);
+	expect("SHUTDOWN", "duplicate preserves first requester and ID",
+	       sw->msg_id == id && sw->sender_instance_id == 3 && !sw->flags, 1);
+	queued = NULL;
+	/* A running work item is no longer pending, but must not be rearmed. */
+	test_hardirq = true;
+	dispatch(&sent);
+	test_hardirq = false;
+	expect("SHUTDOWN", "duplicate cannot requeue dequeued work", queued == NULL, 1);
+	expect("SHUTDOWN", "duplicates do not enter allocator", irq_allocations, 0);
+	run_work(work, true);
+	expect("SHUTDOWN", "worker acknowledges original request",
+	       sent_to == 3 && ((struct mk_message *)sent.buffer)->msg_id == id, 1);
+}
+
 static void pci_key_regressions(void)
 {
 	const u16 domains[] = { 0x8000, 0xffff };
@@ -656,23 +736,30 @@ static void pci_key_regressions(void)
 
 static void halted_decode_regression(void)
 {
-	struct mk_resource_ack ack = { .resource_id = 65537 };
+	struct mk_resource_ack ack = { .operation = MK_SYS_SHUTDOWN, .resource_id = 65537 };
 	struct mk_ipi_data before;
-	struct mk_halted_work *work;
 	size_t len;
 
+	INIT_WORK(&halted_peer.halted_work, mk_halted_work_fn);
 	assert(!mk_send_message(0, MK_MSG_SYSTEM, MK_SYS_HALTED, &ack,
 				sizeof(ack)));
 	before = sent;
+	irq_allocations = 0;
+	allocation_fails = test_hardirq = true;
 	dispatch(&sent);
-	assert(queued);
-	work = container_of(queued, struct mk_halted_work, work);
-	expect("DECODE", "HALTED retains instance ID", work->instance_id,
-	       65537);
+	allocation_fails = test_hardirq = false;
+	expect("HALTED", "hard IPI does not enter allocator", irq_allocations, 0);
+	expect("HALTED", "notification survives allocator exhaustion", queued != NULL, 1);
+	if (!queued)
+		return;
+	expect("DECODE", "HALTED pins exact instance work",
+	       queued == &halted_peer.halted_work && halted_peer.refs == 1, 1);
 	expect("DECODE", "HALTED receive buffer unchanged",
 	       memcmp(&sent, &before, sizeof(sent)) == 0, 1);
 	queued = NULL;
-	free(work);
+	/* Only admission/decoding here; halt_settlement_test runs the real worker. */
+	atomic_set(&halted_peer.halted_pending, 0);
+	mk_instance_put(&halted_peer);
 
 	for (len = 0; len < sizeof(ack); len++) {
 		assert(!mk_send_message(0, MK_MSG_SYSTEM, MK_SYS_HALTED, &ack,
@@ -681,6 +768,22 @@ static void halted_decode_regression(void)
 		assert(!queued);
 	}
 	expect("DECODE", "short HALTED queues no work", queued == NULL, 1);
+	for (unsigned int invalid = 0; invalid < 4; invalid++) {
+		struct mk_resource_ack bad = ack;
+
+		if (invalid == 0)
+			bad.operation++;
+		else if (invalid == 1)
+			bad.result = -EIO;
+		else if (invalid == 2)
+			bad.resource_id += 1ULL << 32;
+		else
+			bad.resource_id++;
+		assert(!mk_send_message(0, MK_MSG_SYSTEM, MK_SYS_HALTED, &bad, sizeof(bad)));
+		dispatch(&sent);
+		expect("DECODE", "invalid or unknown HALTED queues no work",
+		       !queued && !halted_peer.refs, 1);
+	}
 }
 
 static void failure_regressions(void)
@@ -708,9 +811,13 @@ static void failure_regressions(void)
 
 	p = pending(MK_MSG_RESOURCE, MK_RES_CPU_ADD);
 	allocation_fails = true;
+	test_hardirq = true;
+	irq_allocations = 0;
 	ret = mk_send_message_id(1, MK_MSG_RESOURCE, MK_RES_CPU_ADD, current_id,
 				 NULL, 0);
-	expect("FAILURE", "send allocation error", ret, -ENOMEM);
+	expect("REGRESSION", "send survives allocator exhaustion", ret, 0);
+	expect("REGRESSION", "hard-IPI send does not allocate", irq_allocations, 0);
+	test_hardirq = false;
 	allocation_fails = false;
 	mk_msg_pending_cancel(p);
 	cpu_ack();
@@ -727,6 +834,9 @@ static void failure_regressions(void)
 	cpu_ack();
 	assert(list_empty(&mk_pending_msgs) && !mk_pending_msgs_lock.held);
 	send_error = 0;
+	expect("FAILURE", "oversized payload rejected before arithmetic",
+	       mk_send_message(1, MK_MSG_NETWORK, MK_NET_VSOCK_PKT, NULL, UINT_MAX),
+	       -EMSGSIZE);
 	assert(!mk_send_message(1, MK_MSG_NETWORK, MK_NET_VSOCK_PKT, NULL, 0));
 	expect("REGRESSION", "uncorrelated sender keeps zero ID",
 	       ((struct mk_message *)sent.buffer)->msg_id == 0, 1);
@@ -761,6 +871,10 @@ int main(int argc, char **argv)
 	assert(list_empty(&mk_pending_msgs) && !mk_pending_msgs_lock.held);
 
 	/* Queue creation/lifetime is exercised by cpu_work_test, not this fixture. */
+	for (size_t slot = 0; slot < MK_IPI_RING_SIZE; slot++) {
+		INIT_WORK(&mk_cpu_requests[slot].work, mk_hotplug_work_fn);
+		INIT_WORK(&mk_other_requests[slot].work, mk_hotplug_work_fn);
+	}
 	mk_cpu_hotplug_wq = &cpu_queue;
 	mk_hotplug_accepting = true;
 
@@ -785,6 +899,8 @@ int main(int argc, char **argv)
 		worker_regressions();
 	if (argc == 1 || !strcmp(argv[1], "workers"))
 		halted_decode_regression();
+	if (argc == 1 || !strcmp(argv[1], "workers"))
+		shutdown_admission_regressions();
 	if (argc == 1 || !strcmp(argv[1], "failure"))
 		failure_regressions();
 	return failures ? 1 : 0;

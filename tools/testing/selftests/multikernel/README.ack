@@ -1,5 +1,11 @@
 .. SPDX-License-Identifier: GPL-2.0-only
 
+The message builder no longer allocates a temporary wire buffer. The transport
+assembles in its reserved slot; ACK tests require send success under allocator
+exhaustion and zero hard-IPI allocation attempts. Transport publication and wire
+padding are checked separately by ipi_writer_test.sh. This does not remove the
+remaining resource/PCI work allocations or VSOCK receive allocation.
+
 ACK correlation checks
 ======================
 
@@ -44,6 +50,10 @@ Checks include:
 * Allocation/send failures, cancellation before/after completion, concurrent
   outstanding same-tuple requests, the last u64 ID and exhaustion are checked.
 * Voluntary HALTED and the uncorrelated sender retain their zero-ID behavior.
+* Requested shutdown allocates no work item in hard IPI context, even under
+  allocator exhaustion. A short request cannot consume admission; duplicates
+  cannot replace the first requester/ID or requeue work after dequeue. Admission
+  stays closed until this kernel parks forever; each new kernel has its own slot.
 * PCI add/remove ACKs match requester keys for domains 0x8000 and 0xffff;
   signed promotion must not sign-extend the worker's u64 resource key.
 * Receive decoding preserves wire bytes and sizes, accepts maximum-size trailing
@@ -54,6 +64,14 @@ This is controlled interleaving, not a threaded race, kernel memory-ordering,
 transport-delay, boot or physical-runtime test. Pending entries must be removed
 and the lock released after wait/cancel. Sanitizers can check local memory use
 but do not qualify these substituted kernel boundaries.
+
+The allocation checks cover requested shutdown and HALTED admission. Resource,
+PCI and network receive allocation contexts require separate qualification.
+HALTED pins the exact instance before queueing its embedded work item. Short
+payloads, non-shutdown operations, nonzero results, overflowing instance IDs and
+unknown IDs cannot queue it. halt_settlement_test exercises worker identity,
+duplicate coalescing and reference release; start_lifetime_test checks that a
+queued/running notice prevents a new execution generation.
 
 Protocol limits
 ---------------
